@@ -27,6 +27,24 @@
     });
   });
 
+  // Applying a policy or exclusion requires a reason (recorded in the change
+  // history); previews do not.
+  document.querySelectorAll("form").forEach(function (form) {
+    form.addEventListener("submit", function (event) {
+      var submitter = event.submitter;
+      if (!submitter || !submitter.hasAttribute("data-require-reason")) {
+        return;
+      }
+      var reason = form.querySelector('input[name="reason"]');
+      if (reason && reason.value.trim() === "") {
+        event.preventDefault();
+        reason.setCustomValidity("Describe why this change is needed.");
+        reason.reportValidity();
+        reason.addEventListener("input", function () { reason.setCustomValidity(""); }, { once: true });
+      }
+    });
+  });
+
   // Confirmation dialog for destructive actions (snapshot restore). The
   // message is rendered server-side into data-confirm.
   document.querySelectorAll("form[data-confirm]").forEach(function (form) {

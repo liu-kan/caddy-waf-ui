@@ -1,0 +1,136 @@
+{{define "content"}}
+{{ if .Event }}
+{{ $e := .Event }}
+<div class="top-banner">
+  <div class="u-flex u-between u-wrap u-gap-lg">
+    <div>
+      <h1 class="banner-title banner-title-base">
+        <span class="{{ if eq $e.Action "blocked" }}badge-deny{{ else if eq $e.Action "would_block" }}badge-would{{ else }}badge-detect{{ end }}">{{ if eq $e.Action "blocked" }}BLOCKED{{ else if eq $e.Action "would_block" }}WOULD BLOCK{{ else }}DETECTED{{ end }}</span>
+        <span class="u-mono">{{ $e.Method }} {{ $e.Path }}</span>
+      </h1>
+      <p class="banner-sub">
+        {{ date $e.TS "2006-01-02 15:04:05" }} UTC · site <code>{{ $e.Site }}</code>{{ if and $e.Host (ne $e.Host $e.Site) }} (host <code>{{ $e.Host }}</code>){{ end }}
+        · client <a href="/?tab=events&amp;ip={{ $e.ClientIP }}&amp;range=14d" class="u-mono">{{ $e.ClientIP }}</a>
+        · transaction <code>{{ $e.TxID }}</code> · {{ .EventSource }}{{ if $e.Node }} on <code>{{ $e.Node }}</code>{{ end }}
+      </p>
+      {{ if $e.QueryKeys }}<p class="banner-sub">Query parameters (values are not stored): {{ range $e.QueryKeys }}<code>{{ . }}</code> {{ end }}</p>{{ end }}
+    </div>
+    <div class="u-flex u-col u-gap">
+      <a href="/?tab=events&amp;path={{ $e.Path }}&amp;site={{ $e.Site }}&amp;range=14d" class="secondary outline btn-compact">Same path</a>
+      <a href="/?tab=events&amp;ip={{ $e.ClientIP }}&amp;range=14d" class="secondary outline btn-compact">Same client</a>
+      {{ if .ExploreURL }}<a href="{{ .ExploreURL }}" class="secondary outline btn-compact" rel="noopener noreferrer" target="_blank">Open in Grafana Explore</a>{{ end }}
+    </div>
+  </div>
+  {{ if .CRSMismatch }}<p class="banner-sub u-text-amber">This event was produced by CRS {{ $e.CRS }} while the rule dictionary is CRS {{ .DictVersion }}.</p>{{ end }}
+</div>
+
+<div class="grid-metrics">
+  <div class="metric-card">
+    <h2>Inbound score</h2>
+    <div class="value">{{ $e.ScoreIn }}<span class="u-text-dim"> / {{ if $e.ThrIn }}{{ $e.ThrIn }}{{ else }}5{{ end }}</span></div>
+    <div class="u-text-sm u-text-muted">{{ if $e.ReportedIn }}Coraza reported {{ $e.ReportedIn }}{{ else }}Recomputed from the matches{{ end }}{{ if gt $e.DetectIn $e.ScoreIn }} · {{ $e.DetectIn }} incl. logged-only rules{{ end }}</div>
+  </div>
+  <div class="metric-card">
+    <h2>Outbound score</h2>
+    <div class="value">{{ $e.ScoreOut }}<span class="u-text-dim"> / {{ if $e.ThrOut }}{{ $e.ThrOut }}{{ else }}4{{ end }}</span></div>
+    <div class="u-text-sm u-text-muted">Response inspection{{ if $e.ReportedOut }} · reported {{ $e.ReportedOut }}{{ end }}</div>
+  </div>
+  <div class="metric-card">
+    <h2>Policy at the time</h2>
+    <div class="value value--sm">{{ if $e.Mode }}{{ $e.Mode }}{{ else }}{{ $e.Engine }}{{ end }}</div>
+    <div class="u-text-sm u-text-muted">
+      {{ if $e.Revision }}PL {{ $e.BlockingPL }} blocking / {{ $e.DetectionPL }} detection · thresholds {{ $e.ThrIn }}/{{ $e.ThrOut }}{{ if $e.Tuning }} · tuning{{ end }} · rev <code>{{ $e.Revision }}</code>{{ else }}No UI signature: CRS defaults assumed{{ end }}
+    </div>
+  </div>
+  <div class="metric-card">
+    <h2>Ruleset</h2>
+    <div class="value value--sm">CRS {{ if $e.CRS }}{{ $e.CRS }}{{ else }}?{{ end }}</div>
+    <div class="u-text-sm u-text-muted">Engine {{ $e.Engine }}{{ if $e.Interrupted }} · interrupted{{ end }}{{ if $e.Status }} · status {{ $e.Status }}{{ end }}</div>
+  </div>
+</div>
+
+<div class="card-box">
+  <div class="card-box-header">
+    <div>
+      <h2 class="card-title">Why: every matched rule</h2>
+      <small class="u-text-faint">Detection rules add points; the decision rule compares the total with the threshold; direct-block rules deny regardless of the score.</small>
+    </div>
+  </div>
+  <div class="card-box-body u-flex u-col u-gap">
+    {{ range .EventHits }}
+      <article class="hit-card {{ if .Counted }}hit-card--counted{{ end }}">
+        <div class="u-flex u-between u-wrap u-gap">
+          <div>
+            <a href="/?tab=rules&amp;id={{ .ID }}" class="rule-pill rule-pill--{{ .Kind }}">{{ .ID }}</a>
+            <strong>{{ if .Msg }}{{ .Msg }}{{ else }}{{ .Rule.Msg }}{{ end }}</strong>
+          </div>
+          <span class="badge-tag">{{ .Kind }}{{ if .Category }} · {{ .Category }}{{ end }}</span>
+        </div>
+        <div class="hit-contribution {{ if .Counted }}u-text-amber{{ else }}u-text-muted{{ end }}">{{ .Contribution }}</div>
+        {{ if .Var }}
+          <div class="hit-match">
+            <span class="u-text-dim">matched</span> <code>{{ .Data }}</code>
+            <span class="u-text-dim">in</span> <code>{{ .Var }}</code>
+            {{ if .Value }}<div class="hit-value"><span class="u-text-dim">value:</span> <code>{{ .Value }}</code></div>{{ end }}
+          </div>
+        {{ else if .Data }}
+          <div class="hit-match"><span class="u-text-dim">log data:</span> <code>{{ .Data }}</code></div>
+        {{ end }}
+        {{ if or .NoteZH .CategoryZH }}
+          <div class="note-zh" lang="zh-CN">{{ if .NoteZH }}{{ .NoteZH }}{{ else }}{{ .CategoryZH }}{{ end }}</div>
+        {{ end }}
+        {{ if .Rule.Comment }}
+          <details class="rule-comment"><summary>CRS description</summary><pre>{{ .Rule.Comment }}</pre></details>
+        {{ end }}
+      </article>
+    {{ end }}
+  </div>
+</div>
+
+<div class="card-box">
+  <div class="card-box-header">
+    <div>
+      <h2 class="card-title">If this was a false positive</h2>
+      <small class="u-text-faint">Narrowest exclusions first. The impact replays the last 14 days of this site's events with the exclusion applied. Only exclude when the request was legitimate.</small>
+    </div>
+  </div>
+  {{ if .Suggestions }}
+  <div class="table-scroll">
+    <table class="table-compact u-text-md">
+      <thead><tr><th scope="col">Rule</th><th scope="col">Scope</th><th scope="col">Exclusion</th><th scope="col">Would unblock</th><th scope="col">Attack sources affected</th><th scope="col"></th></tr></thead>
+      <tbody>
+        {{ range .Suggestions }}
+          <tr>
+            <td><a href="/?tab=rules&amp;id={{ .Rule }}" class="rule-pill rule-pill--detection">{{ .Rule }}</a> <small class="u-text-dim">{{ .Var }}</small></td>
+            <td>{{ .Scope }}</td>
+            <td class="u-text-sm">{{ .Exclusion.Describe }}</td>
+            <td class="u-mono">{{ .Impact.Unblocked }} event(s) · {{ .Impact.Sources }} source(s)</td>
+            <td class="u-mono {{ if .Impact.AttackSources }}u-text-danger{{ end }}">{{ .Impact.AttackSources }}{{ if .Impact.AttackEvents }} ({{ .Impact.AttackEvents }} events){{ end }}</td>
+            <td><a class="btn-link" href="/?tab=exclusions&amp;domain={{ $e.Site }}&amp;rule={{ .Exclusion.Value }}&amp;path={{ .Exclusion.Path }}&amp;path_match={{ .Exclusion.PathMatch }}&amp;param={{ .Exclusion.Param }}">Review →</a></td>
+          </tr>
+        {{ end }}
+      </tbody>
+    </table>
+  </div>
+  {{ with index .Suggestions 0 }}
+    <p class="card-box-body u-text-sm {{ if .ClearsEvent }}u-text-ok{{ else }}u-text-amber{{ end }}">
+      {{ if .ClearsEvent }}Applying the narrowest suggestion of every listed rule would let this request through.{{ else }}Other rules would still block this request: review every listed rule.{{ end }}
+    </p>
+  {{ end }}
+  {{ with .CombinedImpact }}
+    <p class="card-box-body u-text-sm">
+      Together, the narrowest exclusions of all listed rules would unblock <strong>{{ .Unblocked }}</strong> event(s) from {{ .Sources }} source(s){{ if .AttackSources }}, <span class="u-text-danger">including {{ .AttackEvents }} event(s) from {{ .AttackSources }} likely attacker(s)</span>{{ end }}.
+      A single rule's exclusion can show 0 when other rules on the same request add enough points on their own.
+    </p>
+  {{ end }}
+  {{ else }}
+    <p class="card-box-empty">No excludable rule contributed to the decision.</p>
+  {{ end }}
+</div>
+{{ else }}
+<div class="card-box card-box--padded">
+  <h1 class="banner-title">Event not found</h1>
+  <p class="card-box-empty">The event is not in memory: it may be older than the retention window or the memory limit. Search the <a href="/?tab=events">event list</a> or Grafana Explore.</p>
+</div>
+{{ end }}
+{{end}}

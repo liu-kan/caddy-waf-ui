@@ -331,21 +331,21 @@ func TestClassifyActionMapping(t *testing.T) {
 		actionsets  []string
 		want        string
 	}{
-		{"explicit deny", "deny", false, nil, "BLOCKED"},
-		{"explicit drop", "drop", false, nil, "BLOCKED"},
-		{"explicit redirect", "redirect", false, nil, "BLOCKED"},
+		{"explicit deny", "deny", false, nil, "DETECTED"},
+		{"explicit drop", "drop", false, nil, "DETECTED"},
+		{"explicit redirect", "redirect", false, nil, "DETECTED"},
 		{"explicit pass", "pass", false, nil, "DETECTED"},
 		{"explicit allow", "allow", false, nil, "DETECTED"},
-		{"deny in actionset", "", false, []string{"id:942100,phase:2,deny,log"}, "BLOCKED"},
-		{"redirect with value in actionset", "", false, []string{"id:12345,phase:2,redirect:https://x/blocked,log"}, "BLOCKED"},
+		{"deny in actionset", "", false, []string{"id:942100,phase:2,deny,log"}, "DETECTED"},
+		{"redirect with value in actionset", "", false, []string{"id:12345,phase:2,redirect:https://x/blocked,log"}, "DETECTED"},
 		{"pass in actionset", "", false, []string{"id:920420,phase:2,pass,log"}, "DETECTED"},
 		{"allow in actionset beats is_interrupted", "", true, []string{"id:910000,phase:1,allow,log"}, "DETECTED"},
 		{"no verbs but interrupted", "", true, []string{"id:920000,phase:2,log"}, "BLOCKED"},
 		{"no signals", "", false, nil, "DETECTED"},
-		{"explicit action beats actionset", "deny", false, []string{"id:910000,phase:1,allow,log"}, "BLOCKED"},
+		{"explicit action beats actionset", "deny", false, []string{"id:910000,phase:1,allow,log"}, "DETECTED"},
 	}
 	for _, tc := range cases {
-		if got := classify(tc.txAction, tc.interrupted, tc.actionsets); got != tc.want {
+		if got := classifyTransaction(tc.txAction, &tc.interrupted, tc.actionsets); got != tc.want {
 			t.Errorf("%s: expected %s, got %s", tc.name, tc.want, got)
 		}
 	}

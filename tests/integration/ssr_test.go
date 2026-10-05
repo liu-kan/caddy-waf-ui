@@ -27,6 +27,7 @@ func setupSSR(t *testing.T, admin *adminStub) http.Handler {
 		t.Fatalf("failed creating managedDir: %v", err)
 	}
 	t.Setenv("CADDY_UI_MANAGED_DIR", managedDir)
+	t.Setenv("CADDY_UI_DATA_DIR", t.TempDir())
 	t.Setenv("CADDY_UI_BACKUP_DIR", backupDir)
 
 	caddyfile := filepath.Join(tmp, "Caddyfile")
@@ -448,7 +449,8 @@ func TestSSRPRGRollbackSuccess(t *testing.T) {
 	if err := os.MkdirAll(slugDir, 0750); err != nil {
 		t.Fatalf("failed creating backups dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(slugDir, "2020-01-01T00-00-00Z.waf.conf"), []byte("restored state"), 0640); err != nil {
+	snapshot := "# Caddy WAF UI managed - do not edit manually\n# domain: example.com | mode: Off | updated: 2020-01-01T00:00:00Z\n"
+	if err := os.WriteFile(filepath.Join(slugDir, "2020-01-01T00-00-00Z.waf.conf"), []byte(snapshot), 0640); err != nil {
 		t.Fatalf("failed seeding snapshot: %v", err)
 	}
 
@@ -476,8 +478,8 @@ func TestSSRPRGRollbackSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the overlay was not restored: %v", err)
 	}
-	if string(overlay) != "restored state" {
-		t.Errorf("the overlay must contain the bytes of the snapshot: %q", overlay)
+	if !strings.Contains(string(overlay), "SecRuleEngine Off") || !strings.Contains(string(overlay), "coraza_waf {") {
+		t.Errorf("the overlay must restore the snapshot's mode in a regenerated overlay: %q", overlay)
 	}
 	if admin.reloads != 1 {
 		t.Errorf("expected 1 Caddy reload, %d made", admin.reloads)

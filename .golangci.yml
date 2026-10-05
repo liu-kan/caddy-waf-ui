@@ -20,7 +20,7 @@ linters:
     rules:
       # G704 (SSRF) / G304 (path traversal) / G703 (taint) in the Admin API
       # client: the base URL is operator-controlled (CADDY_ADMIN_URL, default
-      # http://caddy-waf:2019) and validated by validateAdminURL (scheme,
+      # http://caddy:2019) and validated by validateAdminURL (scheme,
       # non-empty host, no userinfo) before every request; the Caddyfile path
       # (CADDY_UI_CADDYFILE) is likewise operator-controlled. Neither derives
       # from request data.
@@ -35,9 +35,9 @@ linters:
       - path: internal/files/backup.go
         linters: [gosec]
         text: "G(304|703)"
-      # G306/G703 in AtomicWrite: 0644 is deliberate (amendment A, R4-006) -
-      # overlays hold no secrets and must be world-readable by the Caddy
-      # container (UID 1337); the path derives from OverlayPath + DomainSlug
+      # G306/G703 in AtomicWrite: 0640 is deliberate -
+      # overlays and snapshots are readable by the shared Caddy/UI
+      # container UID/GID 65532; the path derives from OverlayPath + DomainSlug
       # (validated components), never from raw request data.
       - path: internal/files/writer.go
         linters: [gosec]

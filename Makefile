@@ -216,7 +216,7 @@ docker-build:                            # Build the local Docker image
 .PHONY: compose-config
 compose-config:                          # Validate the docker-compose configuration
 	@echo "==> Compose config"
-	@docker compose config --quiet
+	@CADDY_UI_TOKEN=$${CADDY_UI_TOKEN:-compose-validation-only} docker compose config --quiet
 	@echo "✓ Compose config passed."
 
 .PHONY: clean

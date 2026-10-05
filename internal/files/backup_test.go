@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/developmi/caddy-waf-ui/internal/domain"
 	"github.com/developmi/caddy-waf-ui/internal/files"
@@ -105,8 +104,8 @@ func TestBackupRetention(t *testing.T) {
 	}
 	// The snapshot created now must carry the current timestamp (ISO8601
 	// format with ":" replaced).
-	if got := entries[0].Name(); got != time.Now().UTC().Format("2006-01-02T15-04-05Z")+".waf.conf" {
-		t.Errorf("snapshot name = %q; expected the {ISO8601}.waf.conf format", got)
+	if fileType, err := files.BackupType(entries[0].Name()); err != nil || fileType != files.FileTypeWAF {
+		t.Errorf("new snapshot is not a valid restorable WAF snapshot: %q (%v)", entries[0].Name(), err)
 	}
 }
 

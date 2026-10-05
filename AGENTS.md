@@ -1,7 +1,7 @@
 # caddy-waf-ui
 
 ## Stack
-- **Type**: Management binary (`cmd/server`) and Web UI sidecar for Caddy + Coraza WAF
+- **Type**: Management binary (`cmd/server`) and Web UI sidecar for caddy-with-auth + Coraza WAF
 - **Language**: Go 1.26.4 (toolchain 1.26.6), stdlib-only (zero external Go dependencies, no vendor)
 - **Frontend / UI**: Server-rendered HTML via `embed.FS` (`internal/ui/templates`, `internal/ui/static/app.js`, `app.css`)
 - **Orchestration / Runtime**: Docker Compose sidecar with Caddy, shared volume `/ui-managed`
@@ -30,12 +30,12 @@
 - **License**: MIT - open source
 - **Maintainer**: Miguel Lozano / Developmi
 - **Architecture**: Sidecar writes configuration overlays (`coraza_waf`, IP rules) to `/ui-managed` and triggers reloads via Caddy Admin API (`:2019/load`)
-- **Container Hardening**: Non-root user `uiuser` (UID 1000), read-only rootfs, drop capabilities ALL, no-new-privileges, pinned packages in Dockerfile (`openssl=3.5.8-r0`)
+- **Container Hardening**: Non-root user `uiuser` (UID 65532), read-only rootfs, drop capabilities ALL, no-new-privileges, pinned packages in Dockerfile (`openssl=3.5.9-r0`)
 - **App Security**: Constant-time password comparison (`subtle.ConstantTimeCompare`), session token generation (`crypto/rand`), login/API sliding rate limiting, CSRF tokens, strict path sanitization against directory traversal
 
 ## CI/CD
 - **Workflows**: GitHub Actions in `.github/workflows/` (`docker-build-scan-sign.yml`, `lint.yml`, `test.yml`)
-- **Registry**: `ghcr.io/developmi/caddy-waf-ui`
+- **Registry**: repository-derived GHCR path in GitHub Actions; Compose builds the UI locally
 - **Triggers**: tags `v*` (releases) + PRs to `main`
 
 ## Conventions

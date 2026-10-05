@@ -2,6 +2,7 @@ package service_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,23 @@ import (
 	"github.com/developmi/caddy-waf-ui/internal/service"
 	"github.com/developmi/caddy-waf-ui/internal/waf"
 )
+
+// liveServers mirrors Caddy's GET /config/apps/http/servers for the fixture
+// host. Caddy keeps coraza_waf directives verbatim, so the revision comment
+// of every managed WAF overlay appears in the live config.
+func liveServers() []byte {
+	var directives []string
+	paths, _ := filepath.Glob(filepath.Join(os.Getenv("CADDY_UI_MANAGED_DIR"), "waf-*.conf"))
+	for _, p := range paths {
+		if content, err := os.ReadFile(p); err == nil {
+			if rev := waf.Revision(content); rev != "" {
+				directives = append(directives, "# waf-config-revision: "+rev)
+			}
+		}
+	}
+	handle, _ := json.Marshal([]map[string]string{{"handler": "waf", "directives": strings.Join(directives, "\n")}})
+	return []byte(`{"srv0":{"routes":[{"match":[{"host":["example.com"]}],"handle":` + string(handle) + `}]}}`)
+}
 
 // adminStub simulates the Caddy Admin API (:2019) and records how many times
 // POST /load was invoked. With fail=true it responds 500 to exercise the D6
@@ -35,7 +53,7 @@ func (s *adminStub) handler(t *testing.T) http.Handler {
 		// fixture host (example.com). NOT counted as a reload.
 		if r.Method == http.MethodGet && r.URL.Path == "/config/apps/http/servers" {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"srv0":{"routes":[{"match":[{"host":["example.com"]}]}]}}`))
+			_, _ = w.Write(liveServers())
 			return
 		}
 		s.calls++
@@ -81,6 +99,7 @@ func setupChainEnv(t *testing.T, failReload bool) *chainEnv {
 	t.Cleanup(server.Close)
 
 	t.Setenv("CADDY_UI_MANAGED_DIR", managedDir)
+	t.Setenv("CADDY_UI_DATA_DIR", filepath.Join(tmp, "data"))
 	t.Setenv("CADDY_UI_BACKUP_DIR", backupDir)
 	t.Setenv("CADDY_UI_CADDYFILE", caddyfile)
 	t.Setenv("CADDY_ADMIN_URL", server.URL)
@@ -291,8 +310,8 @@ func TestUpdateExclusionsSuccess(t *testing.T) {
 	if readErr != nil {
 		t.Fatalf("the exclusions overlay was not written: %v", readErr)
 	}
-	if !strings.Contains(string(conf), "ARGS:q") || !strings.Contains(string(conf), "9000001") {
-		t.Errorf("the overlay does not contain the targeted exclusion:\n%s", conf)
+	if !strings.Contains(string(conf), `SecRuleUpdateTargetById 941100 "!ARGS:q"`) {
+		t.Errorf("the overlay does not contain the parameter-scoped exclusion:\n%s", conf)
 	}
 	if env.admin.calls != 1 {
 		t.Errorf("expected 1 reload, %d made", env.admin.calls)
@@ -364,9 +383,10 @@ const restoredWAFContent = `# Caddy WAF UI managed - do not edit manually
 (restored snippet)
 `
 
-// TestRollbackRestoresSnapshotAndBacksUpCurrent: Rollback restores the bytes
-// of the chosen snapshot over the overlay, backs up FIRST the current state
-// (newest snapshot), reloads Caddy and audits the event.
+// TestRollbackRestoresSnapshotAndBacksUpCurrent: Rollback restores the mode
+// and policy of the chosen snapshot (the overlay is regenerated with the
+// current baseline), backs up FIRST the current state (newest snapshot),
+// reloads Caddy and audits the event.
 func TestRollbackRestoresSnapshotAndBacksUpCurrent(t *testing.T) {
 	env := setupChainEnv(t, false)
 	seedWAFOverlay(t, env.managedDir, "api.example.com", oldWAFContent)
@@ -377,13 +397,14 @@ func TestRollbackRestoresSnapshotAndBacksUpCurrent(t *testing.T) {
 		t.Fatalf("Rollback failed: %v", err)
 	}
 
-	// The overlay must contain exactly the bytes of the restored snapshot.
+	// The overlay carries the snapshot's mode, regenerated as a managed WAF.
 	conf, err := os.ReadFile(filepath.Join(env.managedDir, "waf-api_example_com.conf"))
 	if err != nil {
 		t.Fatalf("failed reading overlay: %v", err)
 	}
-	if string(conf) != restoredWAFContent {
-		t.Errorf("the overlay must contain the bytes of the restored snapshot:\n%s", conf)
+	if !strings.Contains(string(conf), "# domain: api.example.com | mode: Off") ||
+		!strings.Contains(string(conf), "SecRuleEngine Off") || !strings.Contains(string(conf), "load_owasp_crs") {
+		t.Errorf("the overlay must restore the snapshot's mode in a regenerated overlay:\n%s", conf)
 	}
 
 	// The current state was backed up first: 2 snapshots, the newest =
@@ -938,8 +959,8 @@ func TestRollbackReloadFailureRestoreError(t *testing.T) {
 		t.Fatalf("expected a combined error with a failed restore, got: %v", err)
 	}
 
-	// The revert could not complete: the overlay with the snapshot bytes
-	// (restored content) stayed in the moved dir.
+	// The revert could not complete: the overlay regenerated from the
+	// snapshot stayed in the moved dir.
 	conf, readErr := os.ReadFile(filepath.Join(env.managedDir+"-moved", "waf-api_example_com.conf"))
 	if readErr != nil {
 		t.Fatalf("the overlay with the restored content must be preserved in the moved dir: %v", readErr)
@@ -947,8 +968,8 @@ func TestRollbackReloadFailureRestoreError(t *testing.T) {
 	if strings.Contains(string(conf), oldWAFContent) {
 		t.Errorf("if the restore fails, the overlay must keep the restored content:\n%s", conf)
 	}
-	if !strings.Contains(string(conf), "(restored snippet)") {
-		t.Errorf("the moved overlay must contain the bytes of the restored snapshot:\n%s", conf)
+	if !strings.Contains(string(conf), "SecRuleEngine Off") {
+		t.Errorf("the moved overlay must contain the restored snapshot's mode:\n%s", conf)
 	}
 	if !strings.Contains(audit.String(), "rollback_changed_but_reload_failed") || !strings.Contains(audit.String(), "(restore error:") {
 		t.Errorf("expected audit with restore error:\n%s", audit.String())
@@ -963,22 +984,17 @@ func TestRollbackReloadFailureRestoreError(t *testing.T) {
 func TestDeployContractCustomManagedDirs(t *testing.T) {
 	env := setupChainEnv(t, false)
 	t.Setenv("CADDY_UI_INCLUDE_DIR", "/etc/caddy/custom-managed")
-
-	if err := service.UpdateWAFMode("api.example.com", domain.ModeOn, "192.0.2.1"); err != nil {
-		t.Fatalf("UpdateWAFMode failed: %v", err)
+	if err := service.UpdateWAFMode("api.example.com", domain.ModeOn, ""); err != nil {
+		t.Fatal(err)
 	}
-
 	conf, err := os.ReadFile(filepath.Join(env.managedDir, "waf-api_example_com.conf"))
 	if err != nil {
-		t.Fatalf("failed reading overlay: %v", err)
+		t.Fatal(err)
 	}
-	if !strings.Contains(string(conf), "Include /etc/caddy/custom-managed/exclusions-api_example_com.conf") {
-		t.Errorf("the overlay must reference the custom CADDY_UI_INCLUDE_DIR:\n%s", conf)
-	}
-	if strings.Contains(string(conf), "Include /etc/caddy/ui-managed/exclusions-api_example_com.conf") {
-		t.Errorf("the overlay must not contain the default hardcoded Include:\n%s", conf)
+	if strings.Contains(string(conf), "Include /etc/caddy/ui-managed") {
+		t.Fatal("embedded exclusions must not reference a hardcoded mount")
 	}
 	if env.admin.calls != 1 {
-		t.Errorf("expected 1 reload, %d made", env.admin.calls)
+		t.Fatalf("expected one reload, got %d", env.admin.calls)
 	}
 }

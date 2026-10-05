@@ -154,8 +154,16 @@ func tailWindow(f *os.File) ([]byte, error) {
 	if _, err := f.ReadAt(buf, offset); err != nil && err != io.EOF {
 		return nil, err
 	}
+	// Coraza's serial writer can concatenate JSON without newlines. Seek
+	// the next complete transaction rather than decoding a truncated object.
+	// Quotes inside JSON strings are escaped, so this cannot match rule data.
+	if i := bytes.Index(buf, []byte(`{"transaction":`)); i >= 0 {
+		return buf[i:], nil
+	}
 	if i := bytes.IndexByte(buf, '\n'); i >= 0 {
 		buf = buf[i+1:]
+	} else {
+		return nil, nil
 	}
 	return buf, nil
 }
@@ -174,7 +182,7 @@ type auditTransaction struct {
 	UnixTimestamp int64  `json:"unix_timestamp"`
 	ID            string `json:"id"`
 	ClientIP      string `json:"client_ip"`
-	IsInterrupted bool   `json:"is_interrupted"`
+	IsInterrupted *bool  `json:"is_interrupted"`
 	Action        string `json:"action"`
 	Request       *struct {
 		URI string `json:"uri"`
@@ -204,7 +212,7 @@ func entryFromLine(l auditLine) (AuditEntry, error) {
 	entry := AuditEntry{
 		Timestamp: normalizeTimestamp(l.Transaction.Timestamp, l.Transaction.UnixTimestamp),
 		Client:    l.Transaction.ClientIP,
-		Action:    classify(l.Transaction.Action, l.Transaction.IsInterrupted, actionsetsOf(l.Messages)),
+		Action:    classifyTransaction(l.Transaction.Action, l.Transaction.IsInterrupted, actionsetsOf(l.Messages)),
 	}
 	if l.Transaction.Request != nil {
 		entry.URI = l.Transaction.Request.URI
@@ -242,11 +250,30 @@ func actionsetsOf(messages []auditMessage) []string {
 	return sets
 }
 
-// classify determines the normalized action of an entry. Priority: explicit
-// action field (legacy) > disruptive verbs in the actionsets >
-// is_interrupted > DETECTED by default. allow is considered DETECTED even if
-// it interrupts processing (D7: pass/allow → DETECTED).
-func classify(txAction string, interrupted bool, actionsets []string) string {
+// The actual interruption flag takes priority: deny also appears on matched
+// rules in DetectionOnly. An allow action can end WAF processing without denial.
+func classifyTransaction(txAction string, interrupted *bool, actionsets []string) string {
+	if interrupted != nil {
+		if !*interrupted {
+			return actionDetected
+		}
+		hasAllow := false
+		for _, set := range actionsets {
+			for _, token := range strings.Split(set, ",") {
+				token = strings.Trim(strings.TrimSpace(token), "'\"")
+				if token == "deny" || token == "drop" || token == "redirect" || strings.HasPrefix(token, "redirect:") {
+					return actionBlocked
+				}
+				if token == "allow" {
+					hasAllow = true
+				}
+			}
+		}
+		if hasAllow || strings.EqualFold(txAction, "allow") {
+			return actionDetected
+		}
+		return actionBlocked
+	}
 	switch strings.ToLower(strings.TrimSpace(txAction)) {
 	case "deny", "drop", "redirect":
 		return actionBlocked
@@ -258,11 +285,8 @@ func classify(txAction string, interrupted bool, actionsets []string) string {
 		case "deny", "drop", "redirect":
 			return actionBlocked
 		case "pass", "allow":
-			return actionDetected
+			continue
 		}
-	}
-	if interrupted {
-		return actionBlocked
 	}
 	return actionDetected
 }

@@ -1,124 +1,159 @@
 {{define "content"}}
 {{ if .CurrentSite }}
-<!-- Header & Domain Selector -->
 <div class="top-banner">
   <div class="u-flex u-between u-wrap u-gap-lg">
     <div>
-      <h1 class="banner-title banner-title-base">⚠️ OWASP CRS Exclusion Management</h1>
+      <h1 class="banner-title banner-title-base">⚠️ Rule Exclusions — {{ .CurrentSite.Domain }}</h1>
       <p class="banner-sub">
-        Generates <code>/etc/caddy/ui-managed/exclusions-{{ slug .CurrentSite.Domain }}.conf</code>
+        An exclusion stops one rule (or the rules with a tag) from checking some requests; every other rule still checks them.
+        Without a path or parameter the rule is removed for the site. With a parameter only that parameter is skipped.
+        With a path the exclusion applies to matching requests only. Stored in <code>exclusions-{{ slug .CurrentSite.Domain }}.conf</code> and compiled into the WAF overlay.
       </p>
     </div>
-
     <form method="GET" action="/" class="domain-select-form">
       <input type="hidden" name="tab" value="exclusions">
       <label class="domain-select-label" for="domain">Select Domain:</label>
       <select name="domain" id="domain" class="domain-select">
-        {{ range .Sites }}
-          <option value="{{ .Domain }}" {{ if eq .Domain $.CurrentSite.Domain }}selected{{ end }}>{{ .Domain }}</option>
-        {{ end }}
+        {{ range .Sites }}<option value="{{ .Domain }}" {{ if eq .Domain $.CurrentSite.Domain }}selected{{ end }}>{{ .Domain }}</option>{{ end }}
       </select>
       <button type="submit" class="secondary btn-compact">Go</button>
     </form>
   </div>
 </div>
 
-<!-- Common OWASP CRS False-Positive Rule Catalog -->
-<div class="card-box card-box--padded">
-  <h2 class="card-title card-title-spaced">
-    Common OWASP CRS False-Positive Catalog (One-Click Tune)
-  </h2>
-  <div class="catalog-grid">
-    {{ range .CRSCatalog }}
-      <div class="catalog-card">
-        <div>
-          <div class="u-flex u-between">
-            <strong class="catalog-rule">Rule ID: {{ .RuleID }}</strong>
-            <span class="badge-tag">{{ .Category }}</span>
-          </div>
-          <div class="catalog-name">{{ .Name }}</div>
-          <div class="catalog-desc">{{ .Description }}</div>
-        </div>
-
-        <form method="POST" action="/sites/{{ $.CurrentSite.Domain }}/exclusions" class="m-0">
-          <input type="hidden" name="csrf" value="{{ $.CSRF }}">
-          <input type="hidden" name="domain" value="{{ $.CurrentSite.Domain }}">
-          <input type="hidden" name="tab" value="exclusions">
-          <input type="hidden" name="ruleId" value="{{ .RuleID }}">
-          <label class="param-label">
-            Optional query param scope (ARGS:param)
-            <input type="text" name="param" placeholder="e.g. q" class="param-input">
-          </label>
-          <button type="submit" class="btn-sim btn-block">+ Add Exclusion for {{ $.CurrentSite.Domain }}</button>
-        </form>
-      </div>
-    {{ end }}
-  </div>
-</div>
+{{ if .FormError }}
+<div class="toast-notice toast-notice--error" role="alert"><span>⚠️ {{ .FormError }}</span></div>
+{{ end }}
 
 <div class="grid">
-
-  <!-- Add Custom Exclusion Form & Active Rules List -->
   <div>
-    <!-- Add Custom Form -->
-    <div class="card-box card-box--padded-mb">
-      <h2 class="card-title card-title-spaced">
-        Add Custom SecRuleRemoveById Directive
-      </h2>
-      <form method="POST" action="/sites/{{ .CurrentSite.Domain }}/exclusions">
-        <input type="hidden" name="csrf" value="{{ .CSRF }}">
-        <input type="hidden" name="domain" value="{{ .CurrentSite.Domain }}">
-        <input type="hidden" name="tab" value="exclusions">
-        <label>
-          OWASP Rule ID:
-          <input type="number" name="ruleId" placeholder="e.g. 942100" required class="u-mono">
+    <form method="POST" action="/sites/{{ .CurrentSite.Domain }}/exclusions" class="card-box card-box--padded-mb">
+      <h2 class="card-title card-title-spaced">Add an exclusion</h2>
+      <input type="hidden" name="csrf" value="{{ .CSRF }}">
+      <input type="hidden" name="domain" value="{{ .CurrentSite.Domain }}">
+      <input type="hidden" name="tab" value="exclusions">
+      <div class="grid">
+        <label>Exclude by
+          <select name="type">
+            <option value="id" {{ if ne .ExclusionForm.Type "tag" }}selected{{ end }}>Rule id</option>
+            <option value="tag" {{ if eq .ExclusionForm.Type "tag" }}selected{{ end }}>Tag (e.g. attack-xss)</option>
+          </select>
         </label>
-        <label>
-          Optional Query Param Scope (ARGS:param):
-          <input type="text" name="param" placeholder="e.g. q (leave blank for URI-level)" class="u-mono">
+        <label>Rule id or tag
+          <input type="text" name="ruleId" value="{{ .ExclusionForm.Value }}" placeholder="942100" required class="u-mono">
         </label>
-        <button type="submit">Add Exclusion Directive</button>
-      </form>
-    </div>
+      </div>
+      <label>Parameter (optional): ARGS key as shown in events, or /regex/
+        <input type="text" name="param" value="{{ .ExclusionForm.Param }}" placeholder="q, json.messages.0.content or /^json\.messages\.\d+\.content$/" class="u-mono">
+      </label>
+      <div class="grid">
+        <label>Path (optional)
+          <input type="text" name="path" value="{{ .ExclusionForm.Path }}" placeholder="/api/posts/" class="u-mono">
+        </label>
+        <label>Path match
+          <select name="path_match">
+            <option value="prefix" {{ if ne .ExclusionForm.PathMatch "exact" }}selected{{ end }}>Prefix</option>
+            <option value="exact" {{ if eq .ExclusionForm.PathMatch "exact" }}selected{{ end }}>Exact</option>
+          </select>
+        </label>
+      </div>
+      <label>Note (kept with the exclusion)
+        <input type="text" name="note" value="{{ .ExclusionForm.Note }}" maxlength="200" placeholder="rich text editor posts HTML">
+      </label>
+      <label>Reason (recorded in the change history)
+        <input type="text" name="reason" value="{{ .ExclusionForm.Reason }}" maxlength="500" placeholder="false positive confirmed on event …">
+      </label>
+      <div class="u-flex u-gap">
+        <button type="submit" name="action" value="preview" class="secondary">Preview diff and impact</button>
+        <button type="submit" name="action" value="apply" data-require-reason>Add exclusion</button>
+      </div>
+    </form>
 
-    <!-- Active Exclusions List -->
+    {{ if .ExclusionImpact }}{{ template "impact" .ExclusionImpact }}{{ end }}
+    {{ if .ExclusionPreview }}
+    <div class="card-box">
+      <div class="card-box-header"><span class="file-badge">Generated overlay changes: <strong>waf-{{ slug .CurrentSite.Domain }}.conf</strong></span></div>
+      <div class="code-view">{{ if .ExclusionPreview.Diff }}<pre class="diff">{{ .ExclusionPreview.Diff }}</pre>{{ else }}<pre>No change to the generated configuration (already excluded?).</pre>{{ end }}</div>
+    </div>
+    {{ end }}
+
     <div class="card-box card-box--padded">
-      <h2 class="card-title card-title-spaced">
-        Active Exclusions for {{ .CurrentSite.Domain }} ({{ len .ActiveExclusions }})
-      </h2>
-      {{ if .ActiveExclusions }}
+      <h2 class="card-title card-title-spaced">Active exclusions ({{ len .ExclusionRows }})</h2>
+      {{ if .ExclusionRows }}
         <div class="list-col list-col--wide">
-          {{ range .ActiveExclusions }}
-            <div class="rule-chip rule-chip--wide">
-              <strong class="u-mono u-text-amber">Rule ID: {{ .Value }}</strong>
-              {{ if .Param }}<span class="badge-tag badge-offset-sm">param: {{ .Param }}</span>{{ end }}
+          {{ range .ExclusionRows }}
+            <div class="rule-chip rule-chip--wide u-flex u-between u-wrap u-gap">
+              <div>
+                <strong class="u-mono u-text-amber">{{ if eq .Ex.Type "tag" }}tag {{ .Ex.Value }}{{ else }}<a href="/?tab=rules&amp;id={{ .Ex.Value }}">{{ .Ex.Value }}</a>{{ end }}</strong>
+                <span class="u-text-sm">{{ .Describe }}</span>
+                {{ if .RuleMsg }}<div class="u-text-sm u-text-muted">{{ .RuleMsg }}</div>{{ end }}
+                {{ if .Ex.Note }}<div class="u-text-sm u-text-faint">Note: {{ .Ex.Note }}</div>{{ end }}
+              </div>
+              <form method="POST" action="/sites/{{ $.CurrentSite.Domain }}/exclusions/remove" class="m-0" data-confirm="Remove this exclusion from {{ $.CurrentSite.Domain }}?">
+                <input type="hidden" name="csrf" value="{{ $.CSRF }}">
+                <input type="hidden" name="domain" value="{{ $.CurrentSite.Domain }}">
+                <input type="hidden" name="tab" value="exclusions">
+                <input type="hidden" name="index" value="{{ .Index }}">
+                <input type="hidden" name="value" value="{{ .Ex.Value }}">
+                <input type="hidden" name="param" value="{{ .Ex.Param }}">
+                <input type="hidden" name="path" value="{{ .Ex.Path }}">
+                <button type="submit" class="secondary outline btn-mini">Remove</button>
+              </form>
             </div>
           {{ end }}
         </div>
       {{ else }}
-        <p class="list-empty">No CRS exclusions active. All OWASP CRS rules are enforced.</p>
+        <p class="list-empty">No exclusions configured for this site.</p>
       {{ end }}
     </div>
   </div>
 
-  <!-- Generated Exclusions Code Preview -->
   <div>
+    {{ if .FPCandidates }}
+    <div class="card-box">
+      <div class="card-box-header"><div><h2 class="card-title">False-positive candidates (7 days)</h2><small class="u-text-faint">Same rule, path and variable from many clean sources</small></div></div>
+      <div class="table-scroll">
+        <table class="table-compact u-text-md">
+          <thead><tr><th scope="col">Rule</th><th scope="col">Path</th><th scope="col">Variable</th><th scope="col">Sources</th><th scope="col"></th></tr></thead>
+          <tbody>
+            {{ range .FPCandidates }}
+              <tr><td><a href="/?tab=rules&amp;id={{ .Rule }}" class="rule-pill rule-pill--detection" title="{{ .RuleMsg }}">{{ .Rule }}</a></td><td class="u-mono cell-uri">{{ .Path }}</td><td class="u-mono">{{ .Var }}</td><td>{{ .Sources }}</td><td><a class="btn-link" href="{{ fpExclusionURL . }}">Use</a></td></tr>
+            {{ end }}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {{ end }}
+    <div class="card-box">
+      <div class="card-box-header"><div><h2 class="card-title">Rules matching this site (7 days)</h2><small class="u-text-faint">From the stored events; decision rules are omitted</small></div></div>
+      <div class="table-scroll">
+        <table class="table-compact u-text-md">
+          <thead><tr><th scope="col">Rule</th><th scope="col">Events</th><th scope="col">Sources</th><th scope="col">Top variable</th><th scope="col"></th></tr></thead>
+          <tbody>
+            {{ range .TopRules }}
+              <tr>
+                <td><a href="/?tab=rules&amp;id={{ .ID }}" class="rule-pill rule-pill--{{ .Rule.Kind }}" title="{{ .Rule.Msg }}">{{ .ID }}</a>{{ if .FPLikely }} <span class="badge-tag">FP?</span>{{ end }}</td>
+                <td>{{ .Events }}</td>
+                <td>{{ .Sources }}{{ if .Attackers }} <span class="u-text-danger">({{ .Attackers }})</span>{{ end }}</td>
+                <td class="u-mono">{{ if .TopVars }}{{ with index .TopVars 0 }}{{ .Key }}{{ end }}{{ end }}</td>
+                <td><a class="btn-link" href="/?tab=events&amp;rule={{ .ID }}&amp;site={{ $.CurrentSite.Domain }}&amp;range=7d">Events</a></td>
+              </tr>
+            {{ else }}
+              <tr><td colspan="5" class="table-empty">No stored events for this site yet.</td></tr>
+            {{ end }}
+          </tbody>
+        </table>
+      </div>
+    </div>
     <div class="card-box">
       <div class="card-box-header">
-        <span class="file-badge">
-          📜 Generated File: <strong>exclusions-{{ slug .CurrentSite.Domain }}.conf</strong>
-        </span>
+        <span class="file-badge">📜 Canonical file: <strong>exclusions-{{ slug .CurrentSite.Domain }}.conf</strong></span>
       </div>
       <div class="code-view">
-        {{ if .ExclusionsConf }}
-          <pre><code>{{ .ExclusionsConf }}</code></pre>
-        {{ else }}
-          <pre><code># No overlay file yet for this domain.</code></pre>
-        {{ end }}
+        {{ if .ExclusionsConf }}<pre><code>{{ .ExclusionsConf }}</code></pre>{{ else }}<pre><code># No overlay file yet for this domain.</code></pre>{{ end }}
       </div>
     </div>
   </div>
-
 </div>
 {{ else }}
 <div class="card-box card-box--padded">

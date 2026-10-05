@@ -27,7 +27,7 @@ func (s *adminSpy) handler(t *testing.T) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/config/apps/http/servers" {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"srv0":{"routes":[{"match":[{"host":["example.com"]}]}]}}`))
+			_, _ = w.Write(liveServers())
 			return
 		}
 		s.calls++
@@ -62,6 +62,7 @@ func setupValidateEnv(t *testing.T) *validateEnv {
 	t.Cleanup(server.Close)
 
 	t.Setenv("CADDY_UI_MANAGED_DIR", env.managedDir)
+	t.Setenv("CADDY_UI_DATA_DIR", t.TempDir())
 	t.Setenv("CADDY_UI_BACKUP_DIR", env.backupDir)
 	t.Setenv("CADDY_ADMIN_URL", server.URL)
 	return env

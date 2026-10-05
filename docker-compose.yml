@@ -1,18 +1,68 @@
+# Uses the existing caddy-with-auth image; only the UI is built here.
+x-ui-image: &ui-image
+  image: caddy-waf-ui:local
+  build: .
+
+x-waf-environment: &waf-environment
+  CADDY_UI_CADDYFILE: /etc/caddy/Caddyfile
+  CADDY_UI_MANAGED_DIR: /ui-managed
+  CADDY_UI_INCLUDE_DIR: /etc/caddy/ui-managed
+  CADDY_UI_SITES: ${CADDY_UI_SITES:-localhost}
+  CADDY_UI_CRS_MODE: ${CADDY_UI_CRS_MODE:-embedded}
+  CADDY_UI_CORAZA_CONFIG: ${CADDY_UI_CORAZA_CONFIG:-}
+  CADDY_UI_CRS_SETUP: ${CADDY_UI_CRS_SETUP:-}
+  CADDY_UI_CRS_RULES: ${CADDY_UI_CRS_RULES:-}
+  CADDY_UI_WAF_BEFORE_FILE: ${CADDY_UI_WAF_BEFORE_FILE:-/etc/caddy/waf-custom/before.conf}
+  CADDY_UI_WAF_AFTER_FILE: ${CADDY_UI_WAF_AFTER_FILE:-/etc/caddy/waf-custom/after.conf}
+  CADDY_UI_RESPONSE_BODY_ACCESS: ${CADDY_UI_RESPONSE_BODY_ACCESS:-Off}
+  CADDY_UI_AUDIT_LOG_PARTS: ${CADDY_UI_AUDIT_LOG_PARTS:-AHKZ}
+  CADDY_UI_AUDIT_LOG: ${CADDY_UI_AUDIT_LOG:-/data/logs/coraza-audit.log}
+
 services:
-  caddy-waf:
-    image: ${CADDY_WAF_IMAGE:-ghcr.io/developmi/caddy-waf:v3.5.5}
-    container_name: caddy-waf
-    user: "1337:1337"
+  runtime-init:
+    <<: *ui-image
+    user: "0:0"
+    restart: "no"
+    read_only: true
+    command: ["sh", "/init-volumes.sh"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE]
+    volumes:
+      - ./scripts/init-volumes.sh:/init-volumes.sh:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      - caddy_audit:/data/logs
+      - caddy-ui-config:/ui-managed
+      - caddy-ui-backups:/backups
+      - caddy_admin:/run/caddy-admin
+
+  ui-config-init:
+    <<: *ui-image
+    restart: "no"
+    read_only: true
+    command: ["./caddy-waf-ui", "init"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    environment: *waf-environment
+    volumes:
+      - ${CADDYFILE_PATH:-./Caddyfile.example}:/etc/caddy/Caddyfile:ro
+      - caddy-ui-config:/ui-managed:rw
+    depends_on:
+      runtime-init:
+        condition: service_completed_successfully
+
+  caddy:
+    image: ${CADDY_IMAGE:-liukan/caddy-with-auth:latest}
+    user: "65532:65532"
+    entrypoint: ["/usr/local/bin/caddy"]
+    command: ["run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
     restart: unless-stopped
     read_only: true
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    cap_add:
-      - NET_BIND_SERVICE
-    tmpfs:
-      - /tmp:size=64m,noexec,nosuid,nodev
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    tmpfs: ["/tmp:size=64m,noexec,nosuid,nodev"]
     mem_limit: 512m
     cpus: 1.0
     ports:
@@ -20,144 +70,79 @@ services:
       - "443:443"
       - "443:443/udp"
     volumes:
-      # Mount your custom Caddyfile
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      # Persistent data for certificates
+      - ${CADDYFILE_PATH:-./Caddyfile.example}:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
-      # Configuration storage
       - caddy_config:/config
-      # UI overlays (waf/ip-rules/exclusions) readable by Caddy (:ro).
-      # Created automatically by ui-config-init (only the missing ones, never
-      # overwrites); prod: bind mounts owned by 1337:1337 (INTEGRATION.md)
+      - caddy_audit:/data/logs
       - caddy-ui-config:/etc/caddy/ui-managed:ro
+      - ./waf-custom:/etc/caddy/waf-custom:ro
+      - caddy_admin:/run/caddy-admin
+    # A Unix socket avoids exposing the admin API on any network interface.
     environment:
-      # ACME email for Let's Encrypt certificates
-      - ACME_EMAIL=${ACME_EMAIL:-}
-      # Site address used by Caddyfile (localhost by default)
-      - SITE_ADDRESS=${SITE_ADDRESS:-localhost}
-      # Backend upstream used by Caddyfile
-      - BACKEND_UPSTREAM=${BACKEND_UPSTREAM:-example-app:80}
+      CADDY_ADMIN_LISTEN: unix//run/caddy-admin/admin.sock
+    # The DHI runtime has no shell, pgrep, wget or curl. Readiness is verified
+    # by actual Admin API requests; do not inherit a shell-based healthcheck.
     healthcheck:
-      test: ["CMD-SHELL", "pgrep caddy >/dev/null || exit 1"]
-      interval: 30s
-      timeout: 3s
-      retries: 3
-      start_period: 10s
+      disable: true
     depends_on:
-      # The Caddyfile imports ui-managed overlays: creating them before
-      # starting Caddy (idempotent, missing only) prevents the crash-loop
-      # after recreating the volumes (down -v / first boot).
       ui-config-init:
         condition: service_completed_successfully
+    networks: [caddy-edge]
     logging:
       driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-    networks:
-      - caddy-network
+      options: {max-size: "10m", max-file: "3"}
 
-  # ui-managed overlays initializer. Runs once (restart: "no") with the same
-  # image and user (uiuser) as the UI: the files it creates keep the UI's
-  # ownership, so the UI can always overwrite them. Never overwrites existing
-  # configs - only creates the missing imports.
-  ui-config-init:
-    build: .
-    container_name: ui-config-init
-    restart: "no"
-    command: ["sh", "/init.sh"]
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    tmpfs:
-      - /tmp:size=64m,noexec,nosuid,nodev
-    mem_limit: 128m
-    cpus: 0.50
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-    volumes:
-      - ./scripts/init-ui-managed.sh:/init.sh:ro
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./Caddyfile.example:/etc/caddy/Caddyfile.example:ro
-      - caddy-ui-config:/ui-managed:rw
-
-  # Example backend service (optional)
-  # Exact pin (no :latest): same criteria as the managed image (v3.3.2).
   example-app:
     image: ${EXAMPLE_APP_IMAGE:-containous/whoami:v1.5.0}
-    container_name: example-app
     restart: unless-stopped
+    networks: [caddy-edge]
     mem_limit: 128m
     cpus: 0.50
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-    networks:
-      - caddy-network
 
   caddy-waf-ui:
-    build: .
-    container_name: caddy-waf-ui
+    <<: *ui-image
     restart: unless-stopped
     read_only: true
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    tmpfs:
-      - /tmp:size=64m,noexec,nosuid,nodev
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    tmpfs: ["/tmp:size=64m,noexec,nosuid,nodev"]
     mem_limit: 256m
     cpus: 0.50
-    ports:
-      # Exposed only on localhost for security
-      - "127.0.0.1:8080:8080"
-    networks:
-      - caddy-network
+    ports: ["127.0.0.1:8080:8080"]
+    networks: [ui-access]
     volumes:
-      # Volumes with write permissions exclusive to the UI
       - caddy-ui-config:/ui-managed:rw
       - caddy-ui-backups:/backups:rw
-      # Read-only mount to consume Caddy logs
-      - caddy_data:/data:ro
-      # Read-only base Caddyfile, required for the real reload (POST /load)
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_audit:/data/logs:ro
+      - caddy_admin:/run/caddy-admin:ro
+      - ${CADDYFILE_PATH:-./Caddyfile.example}:/etc/caddy/Caddyfile:ro
     environment:
-      # UI authentication token (inject from the environment/secrets manager)
-      - CADDY_UI_TOKEN=${CADDY_UI_TOKEN:-}
-      # Internal Caddy Admin API
-      - CADDY_ADMIN_URL=${CADDY_ADMIN_URL:-http://caddy-waf:2019}
-      # Caddyfile path sent to POST /load
-      - CADDY_UI_CADDYFILE=${CADDY_UI_CADDYFILE:-/etc/caddy/Caddyfile}
-      # Paths and retention
-      - CADDY_UI_MANAGED_DIR=${CADDY_UI_MANAGED_DIR:-/ui-managed}
-      - CADDY_UI_INCLUDE_DIR=${CADDY_UI_INCLUDE_DIR:-/etc/caddy/ui-managed}
-      - CADDY_UI_BACKUP_DIR=${CADDY_UI_BACKUP_DIR:-/backups}
-      - CADDY_UI_BACKUP_KEEP=${CADDY_UI_BACKUP_KEEP:-10}
-      # Runtime
-      - CADDY_UI_BIND=${CADDY_UI_BIND:-0.0.0.0:8080}
-      - CADDY_UI_LOG_LEVEL=${CADDY_UI_LOG_LEVEL:-info}
-      - CADDY_UI_AUDIT_LOG=${CADDY_UI_AUDIT_LOG:-/data/logs/coraza-audit.log}
+      <<: *waf-environment
+      CADDY_UI_TOKEN: ${CADDY_UI_TOKEN:?Set a generated CADDY_UI_TOKEN}
+      CADDY_ADMIN_URL: ${CADDY_ADMIN_URL:-unix:///run/caddy-admin/admin.sock}
+      CADDY_UI_BACKUP_DIR: /backups
+      CADDY_UI_BACKUP_KEEP: ${CADDY_UI_BACKUP_KEEP:-10}
+      CADDY_UI_BIND: 0.0.0.0:8080
+      CADDY_UI_LOG_LEVEL: ${CADDY_UI_LOG_LEVEL:-info}
+    depends_on:
+      caddy:
+        condition: service_started
     logging:
       driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-    depends_on:
-      caddy-waf:
-        condition: service_healthy
+      options: {max-size: "10m", max-file: "3"}
 
 volumes:
   caddy_data:
   caddy_config:
+  caddy_audit:
+  caddy_admin:
   caddy-ui-config:
   caddy-ui-backups:
 
 networks:
-  caddy-network:
+  caddy-edge:
+    driver: bridge
+  # A regular bridge is needed for Docker to publish the loopback UI port.
+  # No application container joins this network.
+  ui-access:
     driver: bridge

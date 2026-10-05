@@ -14,19 +14,32 @@ import (
 )
 
 // ModeRequest defines the expected body for changing the mode of the WAF.
+// Reason (optional) is recorded in the change journal.
 type ModeRequest struct {
-	Mode domain.WAFMode `json:"mode"`
+	Mode   domain.WAFMode `json:"mode"`
+	Reason string         `json:"reason,omitempty"`
 }
 
 // ExclusionsRequest defines the expected body for updating exclusions.
 type ExclusionsRequest struct {
 	Exclusions []waf.Exclusion `json:"exclusions"`
+	Reason     string          `json:"reason,omitempty"`
 }
 
 // RollbackRequest defines the expected body for restoring a snapshot:
 // the full backup name ("{ISO8601}.{type}.conf", contract D2).
 type RollbackRequest struct {
 	Backup string `json:"backup"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// reasonOf returns the change reason of an API call: the payload field, or
+// the X-Change-Reason header for payloads without one (IP rules).
+func reasonOf(r *http.Request, body string) string {
+	if body != "" {
+		return body
+	}
+	return r.Header.Get("X-Change-Reason")
 }
 
 // maxBodyBytes bounds the size of the JSON API bodies (defense against
@@ -80,7 +93,7 @@ func HandleSetMode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := service.UpdateWAFMode(domainName, req.Mode, clientIP(r)); err != nil {
+	if err := service.ApplyMode(actor(r, reasonOf(r, req.Reason)), domainName, req.Mode); err != nil {
 		if errors.Is(err, service.ErrInvalidDomain) {
 			http.Error(w, "Invalid domain", http.StatusBadRequest)
 			return
@@ -112,7 +125,7 @@ func HandleSetExclusions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := service.UpdateExclusions(domainName, req.Exclusions, clientIP(r)); err != nil {
+	if err := service.ApplyExclusions(actor(r, reasonOf(r, req.Reason)), domainName, req.Exclusions); err != nil {
 		if errors.Is(err, service.ErrInvalidDomain) {
 			http.Error(w, "Invalid domain", http.StatusBadRequest)
 			return
@@ -140,7 +153,7 @@ func HandleSetIPRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := service.UpdateIPRules(domainName, req, clientIP(r)); err != nil {
+	if err := service.ApplyIPRules(actor(r, reasonOf(r, "")), domainName, req); err != nil {
 		if errors.Is(err, service.ErrInvalidDomain) {
 			http.Error(w, "Invalid domain", http.StatusBadRequest)
 			return
@@ -178,7 +191,7 @@ func HandleRollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := service.Rollback(domainName, req.Backup, clientIP(r)); err != nil {
+	if err := service.ApplyRollback(actor(r, reasonOf(r, req.Reason)), domainName, req.Backup); err != nil {
 		if errors.Is(err, service.ErrInvalidDomain) {
 			http.Error(w, "Invalid domain", http.StatusBadRequest)
 			return

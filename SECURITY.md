@@ -69,39 +69,13 @@ cosign verify \
 
 Always pull by digest in production. Do not use `:latest` in production compose files.
 
-## Caddy Admin API - Residual Risk (contract §6)
+## Caddy Admin API authority
 
-The UI reloads Caddy through `POST /load` on the Admin API (`CADDY_ADMIN_URL`,
-default `http://caddy-waf:2019`). **The Admin API call carries no credentials**:
-Caddy's plaintext admin endpoint has no built-in authentication, and this UI
-does not (yet) present a client certificate.
+Default Compose administration uses an owner-restricted Unix socket, mounted only into Caddy and the UI. The socket directory is owned by UID 65532 and mode 0700. The UI's mount is read-only, which prevents filesystem edits but still allows connecting to the socket. Its API authority remains full Caddy configuration control; treat the UI and any other socket-mounting process as trusted operators.
 
-Accepted residual risk - until the mTLS target (cross-project contract §6,
-caddy-waf ROADMAP items 6–7) is implemented, the deployment MUST enforce all
-of these compensating controls:
+HTTP/HTTPS endpoints remain supported for existing deployments. This transport carries no admin credential or configured client certificate. Do not publish its port or assume that different Docker bridge memberships prevent connectivity; verify firewall/routing boundaries on the actual platform. Host/Origin checks do not authenticate callers. The CADDY_ADMIN_URL value is operator-controlled, schemes and paths are validated, redirects are refused, and Unix transport ignores proxies.
 
-1. **Network isolation only**: the Admin API is reachable only over the
-   internal Docker network (never host-published; compose publishes 80/443
-   only). The admin endpoint binds inside the container network
-   (`admin 0.0.0.0:2019 { enforce_origin }`), never on the host - see the
-   compose + bind-mount deployment model in [INTEGRATION.md](./INTEGRATION.md).
-2. **Platform default is `admin off`** (AC-3): `caddy_admin_enabled` is
-   `false` unless the UI is actually deployed; when enabled, the rendered
-   admin block is `admin 0.0.0.0:2019 { enforce_origin }` inside the container
-   network, never published to the host.
-3. **Host firewall denies 2019/2020** on all interfaces (stack L2 UFW/nftables
-   rules) and a fail-safe assert forbids those ports in `allowed_ports`.
-4. **`CADDY_ADMIN_URL` is operator-set and must point at the internal
-   address**; it is never exposed to end users.
-5. **Read-back verification (D3)**: after every `POST /load` the UI verifies
-   the live config via `GET /config/apps/http/servers`; a mismatch fails loud
-   and triggers the overlay rollback path - a compromised reload cannot
-   silently disable the WAF without being reported.
-
-Any deployment that cannot enforce controls 1–4 must NOT enable the UI.
-The mTLS target (identity + `access_control` public keys on Caddy's remote
-admin listener, UI client certificate) removes the reliance on network
-placement alone.
+The read-back check verifies literal hosts after /load, not full TLS/auth/WAF equivalence. On verification failure after a successful load, the service restores files and reloads the restored configuration. Recovery failure is returned explicitly; actual request validation is still necessary.
 
 ## UI Bind Default - LAN Exposure (SC-8)
 
@@ -151,3 +125,7 @@ Documented design decisions, not defects:
   throttling. Rate limiting is intentionally left to the deployment layer:
   Caddy (e.g. the `rate_limit` directive) or the reverse proxy in front of
   the UI.
+
+## Fork deployment defaults
+
+The supplied Compose uses an owner-restricted shared Unix socket for administration, with no TCP admin listener. Applications do not mount this volume. HTTP/HTTPS remains an operator-selected compatibility transport; separate bridge membership alone is not a routing/firewall guarantee. Caddy and UI run as UID/GID 65532; the UI receives only audit logs read-only, not certificate data. New logs/overlays are 0640 with 0750 directories. Default audit parts AHKZ omit request/response headers and bodies, but matched rule messages may still expose sensitive data. UI authentication does not authenticate the Caddy Admin API; its socket ownership or operator-selected network remains an independent trust boundary. Upstream signature examples above apply to upstream images; this fork builds its own UI from source.

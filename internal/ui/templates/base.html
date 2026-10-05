@@ -18,7 +18,7 @@
       <div class="navbar-brand">
         <span class="logo-badge">C</span>
         <span>Caddy WAF UI</span>
-        <span class="badge-tag">v1.0.0</span>
+        <span class="badge-tag">v1.3.0</span>
       </div>
 
       <div class="header-actions">
@@ -32,10 +32,14 @@
     <!-- Tab Navigation Bar -->
     <nav class="nav-tabs" aria-label="Main navigation">
       <a href="?tab=overview" {{ if eq .ActiveTab "overview" }}class="active" aria-current="page"{{ end }}>🛡️ Overview</a>
+      <a href="?tab=events" {{ if or (eq .ActiveTab "events") (eq .ActiveTab "event") }}class="active" aria-current="page"{{ end }}>📊 Events</a>
+      <a href="?tab=analysis" {{ if eq .ActiveTab "analysis" }}class="active" aria-current="page"{{ end }}>🔎 Analysis</a>
+      <a href="?tab=rules" {{ if eq .ActiveTab "rules" }}class="active" aria-current="page"{{ end }}>📖 Rules</a>
       <a href="?tab=sites" {{ if eq .ActiveTab "sites" }}class="active" aria-current="page"{{ end }}>🌐 Domains &amp; WAF</a>
-      <a href="?tab=exclusions" {{ if eq .ActiveTab "exclusions" }}class="active" aria-current="page"{{ end }}>⚠️ CRS Exclusions</a>
+      <a href="?tab=policy" {{ if eq .ActiveTab "policy" }}class="active" aria-current="page"{{ end }}>🎚️ Policy</a>
+      <a href="?tab=exclusions" {{ if eq .ActiveTab "exclusions" }}class="active" aria-current="page"{{ end }}>⚠️ Exclusions</a>
       <a href="?tab=iprules" {{ if eq .ActiveTab "iprules" }}class="active" aria-current="page"{{ end }}>🔑 IP Rules</a>
-      <a href="?tab=logs" {{ if eq .ActiveTab "logs" }}class="active" aria-current="page"{{ end }}>📊 Log Explorer</a>
+      <a href="?tab=logs" {{ if eq .ActiveTab "logs" }}class="active" aria-current="page"{{ end }}>🧾 Raw Audit Log</a>
       <a href="?tab=rollback" {{ if eq .ActiveTab "rollback" }}class="active" aria-current="page"{{ end }}>🔄 Rollback &amp; History</a>
     </nav>
   </header>
@@ -71,4 +75,40 @@
   <script src="/static/app.js" defer></script>
 </body>
 </html>
+{{end}}
+
+{{define "pipeline-status"}}
+<div class="status-strip">
+  {{ if .IngestReady }}
+    <span>Audit log <code>{{ .Ingest.Path }}</code>: read {{ .Ingest.Offset }} of {{ .Ingest.Size }} bytes{{ if not .Ingest.LastPoll.IsZero }}, checked {{ date .Ingest.LastPoll "15:04:05" }}{{ end }}{{ if .Ingest.Truncations }}, truncated {{ .Ingest.Truncations }}×{{ end }}.</span>
+    {{ if .Ingest.LastError }}<span class="u-text-danger">Ingestion error: {{ .Ingest.LastError }}</span>{{ end }}
+  {{ else }}
+    <span class="u-text-amber">Audit log ingestion is not running.</span>
+  {{ end }}
+  {{ if .StoreReady }}<span>{{ .StoreStats.Count }} event(s) in memory{{ if not .StoreStats.Oldest.IsZero }} since {{ date .StoreStats.Oldest "2006-01-02 15:04" }}{{ end }}.</span>{{ end }}
+  <span>Rule dictionary: CRS {{ .DictVersion }}.</span>
+  {{ if .CRSMismatch }}<span class="u-text-amber">Events report CRS {{ range .CRSSeen }}{{ . }} {{ end }}— rule explanations may be outdated; regenerate the dictionary or set CADDY_UI_CRS_RULES_DIR.</span>{{ end }}
+  <span>{{ if .LokiReady }}Loki history: configured.{{ else }}Loki history: not configured.{{ end }}</span>
+</div>
+{{end}}
+
+{{define "impact"}}
+<div class="card-box">
+  <div class="card-box-header">
+    <div>
+      <h2 class="card-title">Estimated impact over the last 14 days</h2>
+      <small class="u-text-faint">Replays the recorded rule matches of this site's stored events with the change applied</small>
+    </div>
+  </div>
+  <div class="card-box-body">
+    <p><strong>{{ .Changed }}</strong> of {{ .Events }} event(s) would change: <strong>{{ .Unblocked }}</strong> no longer blocked, <strong>{{ .NewlyBlocked }}</strong> newly blocked, from {{ .Sources }} source(s).</p>
+    {{ if .AttackSources }}<p class="u-text-danger">{{ .AttackEvents }} of the unblocked event(s) come from {{ .AttackSources }} source(s) flagged as attackers: narrow the scope.</p>{{ end }}
+    {{ range .Caveats }}<p class="u-text-amber u-text-sm">⚠ {{ . }}</p>{{ end }}
+    {{ if .Samples }}
+      <ul class="plain-list">
+        {{ range .Samples }}<li><a href="/?tab=event&amp;tx={{ .TxID }}">{{ date .TS "2006-01-02 15:04" }}</a> <code>{{ .Method }} {{ .Path }}</code> {{ .ClientIP }} · {{ .Action }}</li>{{ end }}
+      </ul>
+    {{ end }}
+  </div>
+</div>
 {{end}}

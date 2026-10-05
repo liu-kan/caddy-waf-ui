@@ -21,6 +21,21 @@ func NewRouter() *http.ServeMux {
 	mux.HandleFunc("GET /api/sites/{domain}/backups", HandleListBackups)
 	mux.HandleFunc("POST /api/sites/{domain}/rollback", HandleRollback)
 
+	// Policy, impact estimates and the change journal
+	mux.HandleFunc("GET /api/sites/{domain}/policy", HandleAPIGetPolicy)
+	mux.HandleFunc("PUT /api/sites/{domain}/policy", HandleAPISetPolicy)
+	mux.HandleFunc("POST /api/sites/{domain}/impact", HandleAPIImpact)
+	mux.HandleFunc("GET /api/changes", HandleAPIChanges)
+
+	// WAF events, explanations, rule dictionary and retrospective analysis
+	mux.HandleFunc("GET /api/events", HandleAPIEvents)
+	mux.HandleFunc("GET /api/events/{tx}", HandleAPIEvent)
+	mux.HandleFunc("GET /api/events/{tx}/explain", HandleAPIExplain)
+	mux.HandleFunc("GET /api/rules", HandleAPIRules)
+	mux.HandleFunc("GET /api/rules/{id}", HandleAPIRule)
+	mux.HandleFunc("GET /api/analysis", HandleAPIAnalysis)
+	mux.HandleFunc("POST /api/loki/backfill", HandleAPIBackfill)
+
 	return mux
 }
 

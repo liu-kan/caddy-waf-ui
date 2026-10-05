@@ -13,6 +13,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"time"
 )
 
 const (
@@ -21,7 +22,7 @@ const (
 	defaultBackupKeep = 10
 	defaultAuditLog   = "/data/logs/coraza-audit.log"
 	defaultCaddyfile  = "/etc/caddy/Caddyfile"
-	defaultAdminURL   = "http://caddy-waf:2019"
+	defaultAdminURL   = "http://caddy:2019"
 	defaultBindAddr   = "0.0.0.0:8080"
 	defaultLogLevel   = "info"
 	defaultIncludeDir = "/etc/caddy/ui-managed"
@@ -68,7 +69,7 @@ func CaddyfilePath() string {
 	return envOr("CADDY_UI_CADDYFILE", defaultCaddyfile)
 }
 
-// AdminURL returns CADDY_ADMIN_URL (default http://caddy-waf:2019): Caddy's
+// AdminURL returns CADDY_ADMIN_URL (default http://caddy:2019): Caddy's
 // Admin API.
 func AdminURL() string {
 	return envOr("CADDY_ADMIN_URL", defaultAdminURL)
@@ -98,4 +99,129 @@ func LogLevel() string {
 // blocks all access without a valid token).
 func Token() string {
 	return os.Getenv("CADDY_UI_TOKEN")
+}
+
+// WAF baseline settings are operator-controlled, never HTTP payload fields.
+func CRSMode() string { return envOr("CADDY_UI_CRS_MODE", "embedded") }
+func CorazaConfig() string {
+	if CRSMode() == "files" {
+		return envOr("CADDY_UI_CORAZA_CONFIG", "/etc/caddy/coraza.conf")
+	}
+	return envOr("CADDY_UI_CORAZA_CONFIG", "@coraza.conf-recommended")
+}
+func CRSSetup() string {
+	if CRSMode() == "files" {
+		return envOr("CADDY_UI_CRS_SETUP", "/etc/caddy/owasp-crs/crs-setup.conf")
+	}
+	return envOr("CADDY_UI_CRS_SETUP", "@crs-setup.conf.example")
+}
+func CRSRules() string {
+	if CRSMode() == "files" {
+		return envOr("CADDY_UI_CRS_RULES", "/etc/caddy/owasp-crs/rules/*.conf")
+	}
+	return envOr("CADDY_UI_CRS_RULES", "@owasp_crs/*.conf")
+}
+func BeforeFile() string         { return os.Getenv("CADDY_UI_WAF_BEFORE_FILE") }
+func AfterFile() string          { return os.Getenv("CADDY_UI_WAF_AFTER_FILE") }
+func ResponseBodyAccess() string { return envOr("CADDY_UI_RESPONSE_BODY_ACCESS", "Off") }
+func AuditLogParts() string      { return envOr("CADDY_UI_AUDIT_LOG_PARTS", "AHKZ") }
+
+// DataDir returns CADDY_UI_DATA_DIR (default /ui-data): the UI's own
+// persistent volume for normalized WAF events, the change journal, ingest
+// cursors and long-term rollups. Alloy reads the shipped files from here.
+func DataDir() string { return envOr("CADDY_UI_DATA_DIR", "/ui-data") }
+
+// EventsRetentionDays returns CADDY_UI_EVENTS_RETENTION_DAYS (default 14,
+// matching the Grafana Cloud free tier): daily event files older than this
+// are deleted. Daily rollups are kept.
+func EventsRetentionDays() int { return positiveIntEnv("CADDY_UI_EVENTS_RETENTION_DAYS", 14) }
+
+// EventsMemoryMax returns CADDY_UI_EVENTS_MEMORY_MAX (default 100000): the
+// number of recent events kept in memory for queries and impact estimates.
+func EventsMemoryMax() int { return positiveIntEnv("CADDY_UI_EVENTS_MEMORY_MAX", 100000) }
+
+// AuditMaxBytes returns CADDY_UI_AUDIT_MAX_BYTES (default 0 = never): once
+// the Coraza audit log exceeds this size and every complete record has been
+// ingested, the UI truncates it. Requires a read-write audit mount.
+func AuditMaxBytes() int64 {
+	if v, err := strconv.ParseInt(os.Getenv("CADDY_UI_AUDIT_MAX_BYTES"), 10, 64); err == nil && v > 0 {
+		return v
+	}
+	return 0
+}
+
+// IngestInterval returns CADDY_UI_INGEST_INTERVAL (default 2s).
+func IngestInterval() time.Duration { return durationEnv("CADDY_UI_INGEST_INTERVAL", 2*time.Second) }
+
+// NodeName returns CADDY_UI_NODE (default: the host name), recorded on
+// events so several Caddy nodes can share one Loki tenant.
+func NodeName() string {
+	if v := os.Getenv("CADDY_UI_NODE"); v != "" {
+		return v
+	}
+	host, err := os.Hostname()
+	if err != nil {
+		return "unknown"
+	}
+	return host
+}
+
+// ActorHeader returns CADDY_UI_ACTOR_HEADER (default empty): a request
+// header set by a trusted authenticating proxy (e.g. caddy-security) whose
+// value is recorded as the actor of configuration changes. It only affects
+// attribution, never authorization.
+func ActorHeader() string { return os.Getenv("CADDY_UI_ACTOR_HEADER") }
+
+// MetricsToken returns CADDY_UI_METRICS_TOKEN (default empty = /metrics
+// disabled): the bearer token Alloy uses to scrape the WAF metrics.
+func MetricsToken() string { return os.Getenv("CADDY_UI_METRICS_TOKEN") }
+
+// CRSRulesDir returns CADDY_UI_CRS_RULES_DIR (default empty): an optional
+// mounted ruleset directory parsed at startup to refresh the embedded rule
+// dictionary when the backend runs a different CRS version.
+func CRSRulesDir() string { return os.Getenv("CADDY_UI_CRS_RULES_DIR") }
+
+// LokiURL returns CADDY_UI_LOKI_URL (default empty = Loki history disabled),
+// e.g. https://logs-prod-012.grafana.net.
+func LokiURL() string { return os.Getenv("CADDY_UI_LOKI_URL") }
+
+// LokiUser returns CADDY_UI_LOKI_USER: the Grafana Cloud Loki user (tenant) id.
+func LokiUser() string { return os.Getenv("CADDY_UI_LOKI_USER") }
+
+// LokiToken returns CADDY_UI_LOKI_TOKEN: a Grafana Cloud access policy token
+// limited to logs:read.
+func LokiToken() string { return os.Getenv("CADDY_UI_LOKI_TOKEN") }
+
+// LokiSelector returns CADDY_UI_LOKI_SELECTOR (default
+// {job="caddy-waf-ui",kind="event"}): the stream selector of shipped events.
+func LokiSelector() string {
+	return envOr("CADDY_UI_LOKI_SELECTOR", `{job="caddy-waf-ui",kind="event"}`)
+}
+
+// LokiSyncInterval returns CADDY_UI_LOKI_SYNC_INTERVAL (default 0 =
+// manual backfill only): periodic import of events shipped by other nodes.
+func LokiSyncInterval() time.Duration { return durationEnv("CADDY_UI_LOKI_SYNC_INTERVAL", 0) }
+
+// GrafanaExploreURL returns CADDY_UI_GRAFANA_URL (default empty): the
+// Grafana stack URL used to link events to Explore.
+func GrafanaExploreURL() string { return os.Getenv("CADDY_UI_GRAFANA_URL") }
+
+// GrafanaLokiDatasource returns CADDY_UI_GRAFANA_LOKI_DATASOURCE (default
+// grafanacloud-logs): the Loki data source uid used in Explore links.
+func GrafanaLokiDatasource() string {
+	return envOr("CADDY_UI_GRAFANA_LOKI_DATASOURCE", "grafanacloud-logs")
+}
+
+func positiveIntEnv(key string, fallback int) int {
+	if v, err := strconv.Atoi(os.Getenv(key)); err == nil && v > 0 {
+		return v
+	}
+	return fallback
+}
+
+func durationEnv(key string, fallback time.Duration) time.Duration {
+	if v, err := time.ParseDuration(os.Getenv(key)); err == nil && v >= 0 {
+		return v
+	}
+	return fallback
 }

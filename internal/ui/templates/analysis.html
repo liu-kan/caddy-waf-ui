@@ -1,0 +1,161 @@
+{{define "content"}}
+{{ $site := "" }}{{ if .Report }}{{ $site = .Report.Site }}{{ end }}
+<div class="top-banner">
+  <div class="u-flex u-between u-wrap u-gap-lg">
+    <div>
+      <h1 class="banner-title banner-title-base">🔎 Retrospective Analysis</h1>
+      <p class="banner-sub">{{ .RangeLabel }}{{ if $site }} · <code>{{ $site }}</code>{{ else }} · all sites{{ end }}. Heuristics: a rule, path and variable matched by many sources that trigger nothing else is a likely false positive; a source matching several attack categories, scanner signatures or many restricted files is a likely attacker.</p>
+    </div>
+    <form method="GET" action="/" class="domain-select-form">
+      <input type="hidden" name="tab" value="analysis">
+      <label class="domain-select-label" for="an-domain">Site:</label>
+      <select name="domain" id="an-domain" class="domain-select">
+        <option value="">All sites</option>
+        {{ range .Sites }}<option value="{{ .Domain }}" {{ if eq .Domain $site }}selected{{ end }}>{{ .Domain }}</option>{{ end }}
+      </select>
+      <select name="range" class="domain-select" aria-label="Range">
+        {{ range .RangeOptions }}<option value="{{ .Key }}" {{ if .Selected }}selected{{ end }}>{{ .Label }}</option>{{ end }}
+      </select>
+      <button type="submit" class="secondary btn-compact">Go</button>
+    </form>
+  </div>
+  {{ template "pipeline-status" . }}
+</div>
+
+{{ with .Report }}
+<div class="grid-metrics">
+  <div class="metric-card"><h2>Events</h2><div class="value">{{ .Events }}</div><div class="u-text-sm u-text-muted">{{ .Sources }} source address(es)</div></div>
+  <div class="metric-card"><h2>Blocked</h2><div class="value u-text-danger">{{ .Blocked }}</div><div class="u-text-sm u-text-muted">{{ .WouldBlock }} would block in DetectionOnly</div></div>
+  <div class="metric-card"><h2>Below threshold</h2><div class="value">{{ .Detected }}</div><div class="u-text-sm u-text-muted">Recorded in tuning mode</div></div>
+  <div class="metric-card"><h2>Likely attackers</h2><div class="value">{{ len .Attackers }}</div><div class="u-text-sm u-text-muted">{{ len .FPCandidates }} false-positive candidate(s)</div></div>
+</div>
+{{ end }}
+
+{{ if .Trend }}
+<div class="card-box">
+  <div class="card-box-header"><div><h2 class="card-title">Daily events (rollups, 14 days)</h2><small class="u-text-faint">Rollups outlive the raw events; peak {{ .TrendMax }} per day</small></div></div>
+  <div class="card-box-body">
+    <svg class="trend" viewBox="0 0 700 120" role="img" aria-label="Daily WAF events over 14 days">
+      {{ range $i, $d := .Trend }}
+        <rect x="{{ mul $i 50 }}" y="{{ sub 100 $d.Height }}" width="40" height="{{ $d.Height }}" class="trend-bar"><title>{{ $d.Day }}: {{ $d.Total }} event(s) — {{ $d.Blocked }} blocked, {{ $d.WouldBlock }} would block, {{ $d.Detected }} detected</title></rect>
+        <text x="{{ add (mul $i 50) 20 }}" y="116" class="trend-label">{{ slice $d.Day 8 10 }}</text>
+      {{ end }}
+    </svg>
+  </div>
+</div>
+{{ end }}
+
+{{ with .Report }}
+{{ if .FPCandidates }}
+<div class="card-box">
+  <div class="card-box-header"><div><h2 class="card-title">False-positive candidates</h2><small class="u-text-faint">Review each one: the exclusion form opens prefilled with the narrowest scope and shows its impact before anything changes.</small></div></div>
+  <div class="table-scroll">
+    <table class="table-compact u-text-md">
+      <thead><tr><th scope="col">Rule</th><th scope="col">Site</th><th scope="col">Path</th><th scope="col">Variable</th><th scope="col">Events</th><th scope="col">Sources</th><th scope="col"></th></tr></thead>
+      <tbody>
+        {{ range .FPCandidates }}
+          <tr>
+            <td><a href="/?tab=rules&amp;id={{ .Rule }}" class="rule-pill rule-pill--detection" title="{{ .RuleMsg }}">{{ .Rule }}</a></td>
+            <td class="u-mono">{{ .Site }}</td>
+            <td class="cell-uri u-mono">{{ .Path }}</td>
+            <td class="u-mono">{{ .Var }}</td>
+            <td>{{ .Events }}{{ if .Blocking }} ({{ .Blocking }} blocking){{ end }}</td>
+            <td>{{ .Sources }}</td>
+            <td><a class="btn-link" href="{{ fpExclusionURL . }}">Review →</a></td>
+          </tr>
+        {{ end }}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{ end }}
+
+<div class="card-box">
+  <div class="card-box-header"><div><h2 class="card-title">Rules</h2><small class="u-text-faint">Decision and control rules are omitted</small></div></div>
+  <div class="table-scroll">
+    <table class="table-compact u-text-md">
+      <thead><tr><th scope="col">Rule</th><th scope="col">Message</th><th scope="col">Events</th><th scope="col">Blocked / would / below</th><th scope="col">Sources</th><th scope="col">Top path</th><th scope="col">Top variable</th><th scope="col"></th></tr></thead>
+      <tbody>
+        {{ range .Rules }}
+          <tr>
+            <td><a href="/?tab=rules&amp;id={{ .ID }}" class="rule-pill rule-pill--{{ .Rule.Kind }}">{{ .ID }}</a>{{ if .FPLikely }} <span class="badge-tag" title="{{ .FPReason }}">FP?</span>{{ end }}</td>
+            <td class="cell-uri" title="{{ .Rule.Msg }}">{{ .Rule.Msg }}</td>
+            <td>{{ .Events }}</td>
+            <td class="u-mono">{{ .Blocked }} / {{ .WouldBlock }} / {{ .Detected }}</td>
+            <td>{{ .Sources }}{{ if .Attackers }} <span class="u-text-danger">({{ .Attackers }} attacker)</span>{{ end }}</td>
+            <td class="u-mono">{{ if .TopPaths }}{{ with index .TopPaths 0 }}{{ .Key }}{{ end }}{{ end }}</td>
+            <td class="u-mono">{{ if .TopVars }}{{ with index .TopVars 0 }}{{ .Key }}{{ end }}{{ end }}</td>
+            <td><a class="btn-link" href="/?tab=events&amp;rule={{ .ID }}&amp;range=14d">Events</a></td>
+          </tr>
+        {{ else }}
+          <tr><td colspan="8" class="table-empty">No rule matches in this window.</td></tr>
+        {{ end }}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="card-box">
+    <div class="card-box-header"><h2 class="card-title">Likely attackers</h2></div>
+    <div class="table-scroll">
+      <table class="table-compact u-text-md">
+        <thead><tr><th scope="col">Source</th><th scope="col">Events</th><th scope="col">Why</th></tr></thead>
+        <tbody>
+          {{ range .Attackers }}
+            <tr><td class="cell-client"><a href="/?tab=events&amp;ip={{ .IP }}&amp;range=14d">{{ .IP }}</a></td><td>{{ .Events }}</td><td class="u-text-sm">{{ .Reason }}</td></tr>
+          {{ else }}
+            <tr><td colspan="3" class="table-empty">None in this window.</td></tr>
+          {{ end }}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card-box">
+    <div class="card-box-header"><h2 class="card-title">Top sources</h2></div>
+    <div class="table-scroll">
+      <table class="table-compact u-text-md">
+        <thead><tr><th scope="col">Source</th><th scope="col">Events</th><th scope="col">Blocked</th><th scope="col">Categories</th></tr></thead>
+        <tbody>
+          {{ range .TopSources }}
+            <tr><td class="cell-client"><a href="/?tab=events&amp;ip={{ .IP }}&amp;range=14d">{{ .IP }}</a></td><td>{{ .Events }}</td><td>{{ .Blocked }}</td><td class="u-text-sm">{{ range .Categories }}{{ . }} {{ end }}</td></tr>
+          {{ end }}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="card-box">
+    <div class="card-box-header"><h2 class="card-title">Top paths</h2></div>
+    <div class="table-scroll">
+      <table class="table-compact u-text-md">
+        <thead><tr><th scope="col">Path</th><th scope="col">Events</th><th scope="col">Sources</th><th scope="col">Rules</th></tr></thead>
+        <tbody>
+          {{ range .Paths }}
+            <tr><td class="cell-uri u-mono"><a href="/?tab=events&amp;path={{ .Path }}&amp;range=14d">{{ .Path }}</a></td><td>{{ .Events }}</td><td>{{ .Sources }}</td><td>{{ range .Rules }}<a href="/?tab=rules&amp;id={{ .Key }}" class="rule-pill rule-pill--detection">{{ .Key }}</a> {{ end }}</td></tr>
+          {{ end }}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card-box">
+    <div class="card-box-header"><div><h2 class="card-title">New rules (last 24 hours)</h2><small class="u-text-faint">First seen within the last day of this window</small></div></div>
+    <div class="table-scroll">
+      <table class="table-compact u-text-md">
+        <thead><tr><th scope="col">Rule</th><th scope="col">First seen</th><th scope="col">Events</th></tr></thead>
+        <tbody>
+          {{ range .NewRules }}
+            <tr><td><a href="/?tab=rules&amp;id={{ .ID }}" class="rule-pill rule-pill--{{ .Rule.Kind }}" title="{{ .Rule.Msg }}">{{ .ID }}</a> <small>{{ .Rule.Msg }}</small></td><td class="cell-mono-muted">{{ date .FirstSeen "2006-01-02 15:04" }}</td><td>{{ .Events }}</td></tr>
+          {{ else }}
+            <tr><td colspan="3" class="table-empty">No new rules.</td></tr>
+          {{ end }}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{{ if .ScoreGap }}<p class="u-text-sm u-text-amber">{{ .ScoreGap }} event(s) recompute a different score than Coraza reported (chained rules or custom score weights): treat their estimates as approximate.</p>{{ end }}
+{{ end }}
+{{end}}

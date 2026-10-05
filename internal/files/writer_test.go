@@ -46,7 +46,7 @@ func TestAtomicWrite(t *testing.T) {
 
 func TestAtomicWriteFileMode(t *testing.T) {
 	// The file mode is part of the deployment contract (amendment A, R4-006):
-	// the overlays must be readable by Caddy, which runs as UID 1337.
+	// the overlays must be readable by Caddy, which runs as UID/GID 65532.
 	tmpDir, err := os.MkdirTemp("", "caddy-waf-test-*")
 	if err != nil {
 		t.Fatalf("failed to create temp directory: %v", err)
@@ -61,13 +61,13 @@ func TestAtomicWriteFileMode(t *testing.T) {
 		t.Fatalf("AtomicWrite failed: %v", err)
 	}
 
-	// Validate the final file is world-readable (0644)
+	// Validate the final file is world-readable (0640)
 	info, err := os.Stat(targetPath)
 	if err != nil {
 		t.Fatalf("failed to stat the written file: %v", err)
 	}
-	if got := info.Mode().Perm(); got != 0644 {
-		t.Errorf("mode of the written file = %o; expected 0644", got)
+	if got := info.Mode().Perm(); got != 0640 {
+		t.Errorf("mode of the written file = %o; expected 0640", got)
 	}
 }
 

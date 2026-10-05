@@ -2,6 +2,8 @@ package ui
 
 import (
 	"bytes"
+	"encoding/json"
+	"github.com/developmi/caddy-waf-ui/internal/waf"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,6 +11,23 @@ import (
 	"strings"
 	"testing"
 )
+
+// liveServers mirrors Caddy's GET /config/apps/http/servers for the fixture
+// host. Caddy keeps coraza_waf directives verbatim, so the revision comment
+// of every managed WAF overlay appears in the live config.
+func liveServers() []byte {
+	var directives []string
+	paths, _ := filepath.Glob(filepath.Join(os.Getenv("CADDY_UI_MANAGED_DIR"), "waf-*.conf"))
+	for _, p := range paths {
+		if content, err := os.ReadFile(p); err == nil {
+			if rev := waf.Revision(content); rev != "" {
+				directives = append(directives, "# waf-config-revision: "+rev)
+			}
+		}
+	}
+	handle, _ := json.Marshal([]map[string]string{{"handler": "waf", "directives": strings.Join(directives, "\n")}})
+	return []byte(`{"srv0":{"routes":[{"match":[{"host":["example.com"]}],"handle":` + string(handle) + `}]}}`)
+}
 
 // adminStubUI simulates the Caddy Admin API (:2019) so the service chain
 // completes the reload in the REST handler tests (package ui).
@@ -23,7 +42,7 @@ func (s *adminStubUI) handler(t *testing.T) http.Handler {
 		// contract: it serves the fixture host (example.com).
 		if r.Method == http.MethodGet && r.URL.Path == "/config/apps/http/servers" {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"srv0":{"routes":[{"match":[{"host":["example.com"]}]}]}}`))
+			_, _ = w.Write(liveServers())
 			return
 		}
 		if r.Method != http.MethodPost || r.URL.Path != "/load" {
@@ -46,6 +65,7 @@ func setupUIEnv(t *testing.T) *http.ServeMux {
 		t.Fatalf("failed creating managedDir: %v", err)
 	}
 	t.Setenv("CADDY_UI_MANAGED_DIR", managedDir)
+	t.Setenv("CADDY_UI_DATA_DIR", filepath.Join(tmp, "data"))
 	t.Setenv("CADDY_UI_BACKUP_DIR", backupDir)
 
 	caddyfile := filepath.Join(tmp, "Caddyfile")
@@ -481,7 +501,7 @@ func TestAPIRollbackSuccess(t *testing.T) {
 	if err := os.WriteFile(overlayPath, []byte("current state"), 0640); err != nil {
 		t.Fatalf("failed seeding overlay: %v", err)
 	}
-	seedUISnapshot(t, "example_com", "2020-01-01T00-00-00Z.waf.conf", "restored state")
+	seedUISnapshot(t, "example_com", "2020-01-01T00-00-00Z.waf.conf", "# Caddy WAF UI managed - do not edit manually\n# domain: example.com | mode: Off | updated: 2020-01-01T00:00:00Z\n")
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, apiRequest(t, http.MethodPost, "/api/sites/example.com/rollback", `{"backup":"2020-01-01T00-00-00Z.waf.conf"}`))
@@ -493,8 +513,8 @@ func TestAPIRollbackSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the overlay was not restored: %v", err)
 	}
-	if string(overlay) != "restored state" {
-		t.Errorf("the overlay must contain the bytes of the snapshot: %q", overlay)
+	if !strings.Contains(string(overlay), "SecRuleEngine Off") || !strings.Contains(string(overlay), "coraza_waf {") {
+		t.Errorf("the overlay must restore the snapshot's mode in a regenerated overlay: %q", overlay)
 	}
 }
 

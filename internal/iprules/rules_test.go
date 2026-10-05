@@ -27,7 +27,7 @@ func TestGenerateSnippet(t *testing.T) {
 			},
 			wantErr: false,
 			fragments: []string{
-				"remote_ip 10.0.0.0/8",
+				"client_ip 10.0.0.0/8",
 			},
 		},
 		{
@@ -37,7 +37,7 @@ func TestGenerateSnippet(t *testing.T) {
 			},
 			wantErr: false,
 			fragments: []string{
-				"remote_ip 1.2.3.4/32",
+				"client_ip 1.2.3.4/32",
 			},
 		},
 		{
@@ -47,7 +47,7 @@ func TestGenerateSnippet(t *testing.T) {
 			},
 			wantErr: false,
 			fragments: []string{
-				"remote_ip ::1/128",
+				"client_ip ::1/128",
 			},
 		},
 		{
@@ -78,7 +78,7 @@ func TestGenerateSnippet(t *testing.T) {
 			},
 			wantErr: false,
 			fragments: []string{
-				"remote_ip 203.0.113.5/32",
+				"client_ip 203.0.113.5/32",
 			},
 		},
 		{
@@ -157,10 +157,10 @@ func TestGenerateSnippetBothAllowAndDeny(t *testing.T) {
 		t.Fatalf("GenerateSnippet failed: %v", err)
 	}
 	content := string(snippet)
-	if !strings.Contains(content, "remote_ip 198.51.100.1/32") {
+	if !strings.Contains(content, "client_ip 198.51.100.1/32") {
 		t.Errorf("missing denylist rule in snippet: %s", content)
 	}
-	if !strings.Contains(content, "remote_ip 192.0.2.1/32") {
+	if !strings.Contains(content, "client_ip 192.0.2.1/32") {
 		t.Errorf("missing allowlist rule in snippet: %s", content)
 	}
 }

@@ -55,7 +55,7 @@ func HandleLogout(w http.ResponseWriter, r *http.Request) {
 func HandleFormSetMode(w http.ResponseWriter, r *http.Request) {
 	domainName := r.PathValue("domain")
 	mode := domain.WAFMode(r.FormValue("mode"))
-	if err := service.UpdateWAFMode(domainName, mode, r.RemoteAddr); err != nil {
+	if err := service.ApplyMode(actor(r, r.FormValue("reason")), domainName, mode); err != nil {
 		redirectAfterForm(w, r, "error")
 		return
 	}
@@ -65,14 +65,13 @@ func HandleFormSetMode(w http.ResponseWriter, r *http.Request) {
 // HandleFormAddExclusion processes POST /sites/{domain}/exclusions: it
 // merges the new exclusion with the active ones (overlay.go) and sends the
 // COMPLETE list to the shared chain - which replaces the overlay. Without the
-// merge, adding a rule would silently delete the existing ones.
+// merge, adding a rule would silently delete the existing ones. With
+// action=preview nothing is changed: the page shows the generated diff and
+// the estimated impact over the stored events.
 func HandleFormAddExclusion(w http.ResponseWriter, r *http.Request) {
 	domainName := r.PathValue("domain")
-	exclusion := waf.Exclusion{
-		Type:  waf.ExcludeByID,
-		Value: r.FormValue("ruleId"),
-		Param: r.FormValue("param"),
-	}
+	_ = r.ParseForm()
+	exclusion, form := exclusionFromRequest(r)
 
 	current, err := readExclusions(domainName)
 	if err != nil {
@@ -81,7 +80,17 @@ func HandleFormAddExclusion(w http.ResponseWriter, r *http.Request) {
 	}
 	merged := append(current, exclusion)
 
-	if err := service.UpdateExclusions(domainName, merged, r.RemoteAddr); err != nil {
+	if r.FormValue("action") == "preview" {
+		if err := waf.ValidateExclusions([]waf.Exclusion{exclusion}); err != nil {
+			renderTab(w, r, "exclusions", domainName, func(d *pageData) {
+				d.ExclusionForm, d.FormError = form, err.Error()
+			})
+			return
+		}
+		previewExclusions(w, r, domainName, form, exclusion, merged)
+		return
+	}
+	if err := service.ApplyExclusions(actor(r, form.Reason), domainName, merged); err != nil {
 		redirectAfterForm(w, r, "error")
 		return
 	}
@@ -111,7 +120,7 @@ func HandleFormAddIPRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := service.UpdateIPRules(domainName, current, r.RemoteAddr); err != nil {
+	if err := service.ApplyIPRules(actor(r, r.FormValue("reason")), domainName, current); err != nil {
 		redirectAfterForm(w, r, "error")
 		return
 	}
@@ -127,7 +136,7 @@ func HandleFormRollback(w http.ResponseWriter, r *http.Request) {
 	domainName := r.PathValue("domain")
 	backupID := r.FormValue("snapId")
 
-	if err := service.Rollback(domainName, backupID, r.RemoteAddr); err != nil {
+	if err := service.ApplyRollback(actor(r, r.FormValue("reason")), domainName, backupID); err != nil {
 		redirectAfterForm(w, r, "error")
 		return
 	}

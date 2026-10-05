@@ -24,14 +24,14 @@ const ipRulesTemplate = `# Caddy WAF UI managed - do not edit manually
 {{ if .DenyStr -}}
 # Denylist
 @ip_deny_{{ .Slug }} {
-    remote_ip {{ .DenyStr }}
+    client_ip {{ .DenyStr }}
 }
 abort @ip_deny_{{ .Slug }}
 {{ end }}
 {{- if .AllowStr }}
 # Allowlist (if set, all other IPs are denied)
 @ip_allow_{{ .Slug }} {
-    not remote_ip {{ .AllowStr }}
+    not client_ip {{ .AllowStr }}
 }
 abort @ip_allow_{{ .Slug }}
 {{ end }}

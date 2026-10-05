@@ -20,37 +20,15 @@ import (
 //     list): without this, adding a rule would silently delete the existing
 //     ones.
 var (
-	exclusionURLLine   = regexp.MustCompile(`^SecRuleRemoveById\s+(\d+)$`)
-	exclusionTagLine   = regexp.MustCompile(`^SecRuleRemoveByTag\s+"([A-Za-z0-9_-]+)"$`)
-	exclusionTargetID  = regexp.MustCompile(`^SecRule ARGS:([A-Za-z0-9_-]+)\s+"@unconditionalMatch"\s+"id:\d+,phase:2,pass,nolog,ctl:ruleRemoveById=(\d+)"$`)
-	exclusionTargetTag = regexp.MustCompile(`^SecRule ARGS:([A-Za-z0-9_-]+)\s+"@unconditionalMatch"\s+"id:\d+,phase:2,pass,nolog,ctl:ruleRemoveByTag=([A-Za-z0-9_-]+)"$`)
-	ipRulesDenyLine    = regexp.MustCompile(`^\s*remote_ip\s+(.+)$`)
-	ipRulesAllowLine   = regexp.MustCompile(`^\s*not remote_ip\s+(.+)$`)
+	ipRulesDenyLine  = regexp.MustCompile(`^\s*(?:client_ip|remote_ip)\s+(.+)$`)
+	ipRulesAllowLine = regexp.MustCompile(`^\s*not (?:client_ip|remote_ip)\s+(.+)$`)
 )
 
-// parseExclusionsOverlay extracts the exclusions of the generated overlay.
-// Unknown lines (comments, headers) are ignored: the parser only recognizes
-// directives that the generator itself writes.
+// parseExclusionsOverlay extracts the exclusions of the canonical file:
+// metadata comments of current releases or the directives of older ones
+// (waf.ParseExclusions owns the format).
 func parseExclusionsOverlay(content []byte) ([]waf.Exclusion, error) {
-	var exclusions []waf.Exclusion
-	for _, line := range strings.Split(string(content), "\n") {
-		trimmed := strings.TrimSpace(line)
-		switch {
-		case exclusionURLLine.MatchString(trimmed):
-			m := exclusionURLLine.FindStringSubmatch(trimmed)
-			exclusions = append(exclusions, waf.Exclusion{Type: waf.ExcludeByID, Value: m[1]})
-		case exclusionTagLine.MatchString(trimmed):
-			m := exclusionTagLine.FindStringSubmatch(trimmed)
-			exclusions = append(exclusions, waf.Exclusion{Type: waf.ExcludeByTag, Value: m[1]})
-		case exclusionTargetID.MatchString(trimmed):
-			m := exclusionTargetID.FindStringSubmatch(trimmed)
-			exclusions = append(exclusions, waf.Exclusion{Type: waf.ExcludeByID, Value: m[2], Param: m[1]})
-		case exclusionTargetTag.MatchString(trimmed):
-			m := exclusionTargetTag.FindStringSubmatch(trimmed)
-			exclusions = append(exclusions, waf.Exclusion{Type: waf.ExcludeByTag, Value: m[2], Param: m[1]})
-		}
-	}
-	return exclusions, nil
+	return waf.ParseExclusions(content)
 }
 
 // parseIPRulesOverlay extracts the allow/deny lists of the generated

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/developmi/caddy-waf-ui/internal/config"
@@ -20,11 +21,11 @@ var ErrInvalidBackup = errors.New("invalid configuration snapshot")
 
 // backupNamePattern validates the canonical name of a snapshot:
 // {ISO8601 UTC with :→-}.{type}.conf - e.g.: 2026-08-07T15-52-13Z.waf.conf.
-// The strict pattern (20-character timestamp + known type) prevents path
+// The strict timestamp (optional nine-digit fraction) + known type prevents path
 // traversal and any name outside the backup convention.
 // The type set is built from the FileType* constants (J5-7) so regexes and
 // switches never diverge.
-var backupNamePattern = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z)\.(` +
+var backupNamePattern = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:\.[0-9]{9})?Z)\.(` +
 	FileTypeWAF + `|` + FileTypeExclusions + `|` + FileTypeIPRules + `)\.conf$`)
 
 // BackupType validates a snapshot name and returns the overlay type it
@@ -70,8 +71,8 @@ func ListBackups(domainName string) ([]BackupInfo, error) {
 	// The hyphenated ISO8601 sorts lexicographically = chronologically:
 	// descending leaves the newest snapshot first.
 	sort.Slice(backups, func(i, j int) bool {
-		keyI := backups[i].Timestamp + backups[i].FileType
-		keyJ := backups[j].Timestamp + backups[j].FileType
+		keyI := timestampSortKey(backups[i].Timestamp) + backups[i].FileType
+		keyJ := timestampSortKey(backups[j].Timestamp) + backups[j].FileType
 		return keyI > keyJ
 	})
 
@@ -159,7 +160,7 @@ func Backup(domainName string, fileType string) error {
 
 	// 3. Generate the snapshot with format {ISO8601}.{fileType}.conf[cite: 1]
 	// We use a filename-safe format (replacing : with -)
-	timestamp := time.Now().UTC().Format("2006-01-02T15-04-05Z")
+	timestamp := time.Now().UTC().Format("2006-01-02T15-04-05.000000000Z")
 	backupFileName := fmt.Sprintf("%s.%s.conf", timestamp, fileType)
 	backupPath := filepath.Join(domainBackupDir, backupFileName)
 
@@ -172,21 +173,37 @@ func Backup(domainName string, fileType string) error {
 }
 
 // copyFile is a helper that copies the bytes of one file to another
-func copyFile(src, dst string) error {
+func copyFile(src, dst string) (err error) {
 	sourceFile, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = sourceFile.Close() }()
 
-	destFile, err := os.Create(dst)
+	// Snapshot files use the same restricted owner/group policy as overlays.
+	destFile, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0640) //nolint:gosec // G302: intentional shared UID/GID 65532, no world access.
 	if err != nil {
 		return err
 	}
-	defer func() { _ = destFile.Close() }()
+	defer func() {
+		_ = destFile.Close()
+		if err != nil {
+			_ = os.Remove(dst)
+		}
+	}()
 
 	_, err = io.Copy(destFile, sourceFile)
-	return err
+	if err != nil {
+		return err
+	}
+	return destFile.Close()
+}
+
+func timestampSortKey(timestamp string) string {
+	if strings.Contains(timestamp, ".") {
+		return timestamp
+	}
+	return strings.TrimSuffix(timestamp, "Z") + ".000000000Z"
 }
 
 // enforceRetention removes the oldest snapshots when the limit is exceeded
@@ -219,7 +236,9 @@ func enforceRetention(dir, fileType string, limit int) error {
 	// Sort alphabetically (with the ISO8601 as built, alphabetical order is
 	// chronological)
 	sort.Slice(backups, func(i, j int) bool {
-		return backups[i].Name() < backups[j].Name()
+		mi := backupNamePattern.FindStringSubmatch(backups[i].Name())
+		mj := backupNamePattern.FindStringSubmatch(backups[j].Name())
+		return timestampSortKey(mi[1]) < timestampSortKey(mj[1])
 	})
 
 	// Remove the oldest

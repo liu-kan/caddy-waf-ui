@@ -265,8 +265,8 @@ func TestHandleFormAddExclusionSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the overlay was not written: %v", err)
 	}
-	if !strings.Contains(string(overlay), "ARGS:q") || !strings.Contains(string(overlay), "9000001") {
-		t.Errorf("the overlay does not contain the targeted exclusion:\n%s", overlay)
+	if !strings.Contains(string(overlay), `SecRuleUpdateTargetById 941100 "!ARGS:q"`) {
+		t.Errorf("the overlay does not contain the parameter-scoped exclusion:\n%s", overlay)
 	}
 }
 
@@ -339,7 +339,7 @@ func TestHandleFormRollbackSuccess(t *testing.T) {
 	if err := os.WriteFile(overlayPath, []byte("current state"), 0640); err != nil {
 		t.Fatalf("failed seeding overlay: %v", err)
 	}
-	seedUISnapshot(t, "example_com", "2020-01-01T00-00-00Z.waf.conf", "restored state")
+	seedUISnapshot(t, "example_com", "2020-01-01T00-00-00Z.waf.conf", "# Caddy WAF UI managed - do not edit manually\n# domain: example.com | mode: Off | updated: 2020-01-01T00:00:00Z\n")
 
 	rec := formPost(t, mux, "/sites/example.com/rollback", url.Values{"snapId": {"2020-01-01T00-00-00Z.waf.conf"}, "tab": {"rollback"}})
 
@@ -354,8 +354,8 @@ func TestHandleFormRollbackSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the overlay was not restored: %v", err)
 	}
-	if string(overlay) != "restored state" {
-		t.Errorf("the overlay must contain the bytes of the snapshot: %q", overlay)
+	if !strings.Contains(string(overlay), "SecRuleEngine Off") || !strings.Contains(string(overlay), "coraza_waf {") {
+		t.Errorf("the overlay must restore the snapshot's mode in a regenerated overlay: %q", overlay)
 	}
 }
 

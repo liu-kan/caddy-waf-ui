@@ -815,3 +815,76 @@ form textarea {
     width: 100%;
   }
 }
+
+/* ---- WAF events, rules, analysis and policy pages ---- */
+.badge-would {
+  display: inline-block;
+  padding: 0.1rem 0.45rem;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.14);
+  border: 1px solid rgba(251, 191, 36, 0.45);
+}
+.rule-pill {
+  display: inline-block;
+  margin: 0 0.15rem 0.15rem 0;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  text-decoration: none;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  color: #cbd5e1;
+}
+.rule-pill--detection { border-color: rgba(96, 165, 250, 0.6); color: #93c5fd; }
+.rule-pill--decision { border-color: rgba(248, 113, 113, 0.6); color: #fca5a5; }
+.rule-pill--blocking { border-color: rgba(244, 63, 94, 0.7); color: #fda4af; }
+.rule-pill--unknown, .rule-pill--ui { border-color: rgba(167, 139, 250, 0.6); color: #c4b5fd; }
+.status-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+  margin-top: 0.6rem;
+  font-size: 0.8rem;
+  color: #94a3b8;
+}
+.filter-bar--wrap { flex-wrap: wrap; align-items: flex-end; }
+.filter-bar--wrap .filter-field { margin: 0; font-size: 0.78rem; color: #94a3b8; }
+.filter-field--grow { flex: 1 1 16rem; }
+.hit-card {
+  padding: 0.75rem 0.9rem;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(15, 23, 42, 0.35);
+}
+.hit-card--counted { border-left: 3px solid #f59e0b; }
+.hit-contribution { margin-top: 0.3rem; font-size: 0.82rem; }
+.hit-match, .hit-value { margin-top: 0.3rem; font-size: 0.82rem; overflow-wrap: anywhere; }
+.note-zh {
+  margin: 0.5rem 0 0;
+  padding: 0.5rem 0.7rem;
+  border-radius: 6px;
+  background: rgba(59, 130, 246, 0.08);
+  font-size: 0.86rem;
+  line-height: 1.6;
+}
+.note-zh--category { background: rgba(148, 163, 184, 0.08); }
+.rule-comment { margin-top: 0.4rem; font-size: 0.8rem; }
+.rule-comment pre, .pre-wrap { white-space: pre-wrap; font-size: 0.78rem; }
+.def-list dt { font-size: 0.75rem; color: #94a3b8; margin-top: 0.4rem; }
+.def-list dd { margin: 0 0 0.2rem; overflow-wrap: anywhere; }
+.code-wrap { white-space: pre-wrap; word-break: break-all; }
+.plain-list { margin: 0.3rem 0 0.6rem; padding-left: 1.1rem; font-size: 0.85rem; }
+.check-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr)); gap: 0.1rem 1rem; font-size: 0.82rem; }
+.diff { white-space: pre; font-size: 0.78rem; }
+.trend { width: 100%; height: auto; max-height: 160px; }
+.trend-bar { fill: rgba(96, 165, 250, 0.7); }
+.trend-label { fill: #94a3b8; font-size: 10px; text-anchor: middle; }
+.metric-card .value--sm { font-size: 1.2rem; }
+@media (max-width: 640px) {
+  .filter-bar--wrap .filter-field { flex: 1 1 100%; }
+}
+.cell-score { white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }

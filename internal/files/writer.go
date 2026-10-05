@@ -23,11 +23,9 @@ func AtomicWrite(path string, content []byte) (err error) {
 		}
 	}()
 
-	// 0644 permissions (world-readable) by design (amendment A, R4-006): the
-	// overlays contain no secrets and Caddy runs as UID 1337, which must be
-	// able to read them. CreateTemp creates with 0600, so it is explicitly
-	// adjusted before the rename.
-	if err = tmp.Chmod(0644); err != nil {
+	// Both containers share UID/GID 65532. Restrict overlays and snapshots
+	// to their owner/group; no world-readable configuration is needed.
+	if err = tmp.Chmod(0640); err != nil {
 		_ = tmp.Close()
 		return err
 	}

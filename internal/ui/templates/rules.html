@@ -1,0 +1,106 @@
+{{define "content"}}
+{{ if .RuleDetail }}
+{{ $r := .RuleDetail.Rule }}
+<div class="top-banner">
+  <div class="u-flex u-between u-wrap u-gap-lg">
+    <div>
+      <h1 class="banner-title banner-title-base"><span class="rule-pill rule-pill--{{ $r.Kind }}">{{ $r.ID }}</span> {{ if $r.Msg }}{{ $r.Msg }}{{ else }}Rule {{ $r.ID }}{{ end }}</h1>
+      <p class="banner-sub">
+        {{ if .RuleDetail.Known }}
+          {{ $r.Kind }}{{ if $r.Category }} · {{ $r.Category }}{{ end }}{{ if $r.PL }} · paranoia level {{ $r.PL }}{{ end }}{{ if $r.Severity }} · {{ $r.Severity }}{{ end }}{{ if $r.Score }} · +{{ $r.Score }} {{ if eq $r.Dir "out" }}outbound{{ else }}inbound{{ end }}{{ end }}{{ if $r.Phase }} · phase {{ $r.Phase }}{{ end }}
+        {{ else }}
+          Not part of the CRS {{ .DictVersion }} dictionary: a custom rule from the before/after files, or a rule of another CRS version.
+        {{ end }}
+      </p>
+    </div>
+    <div class="u-flex u-col u-gap">
+      <a href="{{ .RuleEvents }}" class="secondary outline btn-compact">Events with this rule</a>
+      {{ if $r.Link }}<a href="{{ $r.Link }}" class="secondary outline btn-compact" rel="noopener noreferrer" target="_blank">Rule source</a>{{ end }}
+    </div>
+  </div>
+</div>
+
+{{ if or .RuleDetail.NoteZH .RuleDetail.CategoryZH }}
+<div class="card-box card-box--padded">
+  <h2 class="card-title card-title-spaced">Explanation (Chinese)</h2>
+  {{ if .RuleDetail.NoteZH }}<p class="note-zh" lang="zh-CN">{{ .RuleDetail.NoteZH }}</p>{{ end }}
+  {{ if .RuleDetail.CategoryZH }}<p class="note-zh note-zh--category"><span class="u-text-dim">Category ·</span> <span lang="zh-CN">{{ .RuleDetail.CategoryZH }}</span></p>{{ end }}
+</div>
+{{ end }}
+
+<div class="grid">
+  <div class="card-box card-box--padded">
+    <h2 class="card-title card-title-spaced">Definition</h2>
+    <dl class="def-list">
+      {{ if $r.Targets }}<dt>Targets</dt><dd><code>{{ $r.Targets }}</code></dd>{{ end }}
+      {{ if $r.Operator }}<dt>Operator</dt><dd><code class="code-wrap">{{ $r.Operator }}</code></dd>{{ end }}
+      {{ range $r.Chain }}<dt>and</dt><dd><code>{{ .Targets }}</code> <code class="code-wrap">{{ .Operator }}</code></dd>{{ end }}
+      {{ if $r.Action }}<dt>Action</dt><dd>{{ $r.Action }}{{ if $r.Status }} (status {{ $r.Status }}){{ end }}</dd>{{ end }}
+      {{ if $r.Tags }}<dt>Tags</dt><dd>{{ range $r.Tags }}<span class="badge-tag">{{ . }}</span> {{ end }}</dd>{{ end }}
+      {{ if $r.File }}<dt>File</dt><dd><code>{{ $r.File }}</code>{{ if $r.Line }}:{{ $r.Line }}{{ end }}</dd>{{ end }}
+    </dl>
+    {{ if $r.Comment }}<h3 class="list-heading-ok">CRS description</h3><pre class="pre-wrap">{{ $r.Comment }}</pre>{{ end }}
+  </div>
+  <div class="card-box card-box--padded">
+    <h2 class="card-title card-title-spaced">Last 14 days</h2>
+    {{ with .RuleDetail.Summary }}
+      <p>{{ .Events }} event(s), {{ .Hits }} match(es) from {{ .Sources }} source(s){{ if .Attackers }}, {{ .Attackers }} of them flagged as attackers{{ end }}. First {{ date .FirstSeen "2006-01-02 15:04" }}, last {{ date .LastSeen "2006-01-02 15:04" }}.</p>
+      <p>Blocked {{ .Blocked }} · would block {{ .WouldBlock }} · below threshold {{ .Detected }}{{ if .FPLikely }} · <span class="u-text-amber">likely false positive: {{ .FPReason }}</span>{{ end }}</p>
+      {{ if .TopPaths }}<h3 class="list-heading-ok">Top paths</h3>
+        <ul class="plain-list">{{ range .TopPaths }}<li><code>{{ .Key }}</code> — {{ .Count }} match(es), {{ .Sources }} source(s)</li>{{ end }}</ul>{{ end }}
+      {{ if .TopVars }}<h3 class="list-heading-ok">Matched variables</h3>
+        <ul class="plain-list">{{ range .TopVars }}<li><code>{{ .Key }}</code> — {{ .Count }} match(es), {{ .Sources }} source(s)</li>{{ end }}</ul>{{ end }}
+      {{ if .Sites }}<p class="u-text-sm u-text-muted">Sites: {{ range .Sites }}<code>{{ . }}</code> {{ end }}</p>{{ end }}
+    {{ else }}
+      <p class="card-box-empty">No matches in the stored events.</p>
+    {{ end }}
+  </div>
+</div>
+{{ else }}
+<div class="top-banner">
+  <h1 class="banner-title banner-title-base">📖 Rule Dictionary — CRS {{ .DictVersion }}</h1>
+  <p class="banner-sub">Every rule id the backend can log, with its meaning, paranoia level and score. Chinese notes explain frequent rules; every detection rule has a category note.</p>
+  <hr class="hr-soft">
+  <form method="GET" action="/" class="filter-bar">
+    <input type="hidden" name="tab" value="rules">
+    <div class="filter-field filter-field--grow">
+      <label class="visually-hidden" for="rule-q">Search rules</label>
+      <input type="text" id="rule-q" name="q" value="{{ .RuleQuery }}" placeholder="Rule id, message, tag or category (e.g. 930130, sqli, paranoia-level/2)" class="filter-input">
+    </div>
+    <label class="filter-field">
+      <span class="visually-hidden">Kind</span>
+      <select name="kind" class="filter-select">
+        <option value="" {{ if eq .RuleKind "" }}selected{{ end }}>All kinds</option>
+        <option value="detection" {{ if eq .RuleKind "detection" }}selected{{ end }}>Detection (adds score)</option>
+        <option value="decision" {{ if eq .RuleKind "decision" }}selected{{ end }}>Decision (threshold)</option>
+        <option value="blocking" {{ if eq .RuleKind "blocking" }}selected{{ end }}>Direct block</option>
+        <option value="control" {{ if eq .RuleKind "control" }}selected{{ end }}>Control flow</option>
+        <option value="correlation" {{ if eq .RuleKind "correlation" }}selected{{ end }}>Correlation</option>
+      </select>
+    </label>
+    <button type="submit" class="secondary btn-filter">Search</button>
+  </form>
+</div>
+<div class="card-box">
+  <div class="table-scroll">
+    <table class="table-compact u-text-md">
+      <thead><tr><th scope="col">Id</th><th scope="col">Kind</th><th scope="col">PL</th><th scope="col">Score</th><th scope="col">Category</th><th scope="col">Message</th></tr></thead>
+      <tbody>
+        {{ range .RuleList }}
+          <tr>
+            <td><a href="/?tab=rules&amp;id={{ .ID }}" class="rule-pill rule-pill--{{ .Kind }}">{{ .ID }}</a></td>
+            <td>{{ .Kind }}</td>
+            <td>{{ if .PL }}{{ .PL }}{{ end }}</td>
+            <td>{{ if .Score }}+{{ .Score }}{{ if eq .Dir "out" }} out{{ end }}{{ end }}</td>
+            <td>{{ .Category }}</td>
+            <td class="cell-uri" title="{{ .Msg }}">{{ .Msg }}</td>
+          </tr>
+        {{ else }}
+          <tr><td colspan="6" class="table-empty">No rules match.</td></tr>
+        {{ end }}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{ end }}
+{{end}}

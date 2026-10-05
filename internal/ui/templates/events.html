@@ -1,0 +1,117 @@
+{{define "content"}}
+<div class="top-banner">
+  <div class="u-flex u-between u-wrap u-gap-lg">
+    <div>
+      <h1 class="banner-title banner-title-base">📊 WAF Events</h1>
+      <p class="banner-sub">
+        Normalized Coraza audit records kept locally for the retention window. Rule ids link to their explanation; open an event to see why it was blocked.
+      </p>
+    </div>
+    {{ if .LokiReady }}
+    <form method="POST" action="/events/backfill" class="domain-select-form">
+      <input type="hidden" name="csrf" value="{{ .CSRF }}">
+      <input type="hidden" name="tab" value="events">
+      <label class="domain-select-label" for="backfill-range">Import from Loki:</label>
+      <select name="range" id="backfill-range" class="domain-select">
+        <option value="24h">Last 24 hours</option>
+        <option value="7d">Last 7 days</option>
+        <option value="14d">Last 14 days</option>
+      </select>
+      <button type="submit" class="secondary btn-compact">Backfill</button>
+    </form>
+    {{ end }}
+  </div>
+  {{ template "pipeline-status" . }}
+  <hr class="hr-soft">
+  <form method="GET" action="/" class="filter-bar filter-bar--wrap">
+    <input type="hidden" name="tab" value="events">
+    <label class="filter-field">Site
+      <select name="site" class="filter-select">
+        <option value="">All sites</option>
+        {{ range .Sites }}<option value="{{ .Domain }}" {{ if eq .Domain $.EventFilter.Site }}selected{{ end }}>{{ .Domain }}</option>{{ end }}
+      </select>
+    </label>
+    <label class="filter-field">Action
+      <select name="action" class="filter-select">
+        <option value="" {{ if eq .EventFilter.Action "" }}selected{{ end }}>All actions</option>
+        <option value="blocked" {{ if eq .EventFilter.Action "blocked" }}selected{{ end }}>Blocked</option>
+        <option value="would_block" {{ if eq .EventFilter.Action "would_block" }}selected{{ end }}>Would block (DetectionOnly)</option>
+        <option value="detected" {{ if eq .EventFilter.Action "detected" }}selected{{ end }}>Detected below threshold</option>
+      </select>
+    </label>
+    <label class="filter-field">Range
+      <select name="range" class="filter-select">
+        {{ range .RangeOptions }}<option value="{{ .Key }}" {{ if .Selected }}selected{{ end }}>{{ .Label }}</option>{{ end }}
+      </select>
+    </label>
+    <label class="filter-field">Client IP
+      <input type="text" name="ip" value="{{ .EventFilter.IP }}" placeholder="203.0.113.7" class="filter-input u-mono">
+    </label>
+    <label class="filter-field">Rule id
+      <input type="text" name="rule" value="{{ .EventFilter.Rule }}" placeholder="942100" class="filter-input u-mono" inputmode="numeric">
+    </label>
+    <label class="filter-field">Path prefix
+      <input type="text" name="path" value="{{ .EventFilter.Path }}" placeholder="/api/" class="filter-input u-mono">
+    </label>
+    <label class="filter-field filter-field--grow">Text
+      <input type="text" name="q" value="{{ .EventFilter.Query }}" placeholder="message, variable, matched data, transaction id" class="filter-input">
+    </label>
+    <button type="submit" class="secondary btn-filter">Filter</button>
+  </form>
+</div>
+
+<div class="card-box">
+  <div class="card-box-header">
+    <div>
+      <h2 class="card-title">{{ .EventTotal }} event(s)</h2>
+      <small class="u-text-faint">Newest first · score is the blocking anomaly score against the inbound threshold recorded with the event</small>
+    </div>
+  </div>
+  <div class="table-scroll">
+    <table class="table-compact u-text-md">
+      <thead>
+        <tr>
+          <th scope="col">Time (UTC)</th>
+          <th scope="col">Site</th>
+          <th scope="col">Action</th>
+          <th scope="col">Score</th>
+          <th scope="col">Request</th>
+          <th scope="col">Client</th>
+          <th scope="col">Rules</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{ range .EventRows }}
+          <tr>
+            <td class="cell-mono-muted"><a href="/?tab=event&amp;tx={{ .E.TxID }}">{{ date .E.TS "2006-01-02 15:04:05" }}</a></td>
+            <td class="u-mono">{{ .E.Site }}</td>
+            <td><span class="{{ .ActionClass }}">{{ .ActionLabel }}</span></td>
+            <td class="cell-score">{{ .ScoreLabel }}</td>
+            <td class="cell-uri" title="{{ .E.Method }} {{ .E.Path }}"><span class="u-text-dim">{{ .E.Method }}</span> {{ .E.Path }}</td>
+            <td class="cell-client"><a href="/?tab=events&amp;ip={{ .E.ClientIP }}&amp;range=14d">{{ .E.ClientIP }}</a></td>
+            <td>
+              {{ range .Rules }}
+                <a href="/?tab=rules&amp;id={{ .ID }}" class="rule-pill rule-pill--{{ .Kind }}" title="{{ .Msg }}">{{ .ID }}</a>
+              {{ end }}
+            </td>
+          </tr>
+        {{ else }}
+          <tr>
+            <td colspan="7" class="table-empty">
+              {{ if .StoreReady }}No events match these filters.{{ else }}The event store is not running; the raw audit log tab still shows the latest records.{{ end }}
+            </td>
+          </tr>
+        {{ end }}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{{ if or .EventPrev .EventNext }}
+<div class="pager">
+  <div>{{ if .EventPrev }}<a href="{{ .EventPrev }}" class="secondary pager-link">← Newer</a>{{ else }}<span class="u-text-dim">← Newer</span>{{ end }}</div>
+  <div>Page {{ .EventPage }} of {{ .EventPages }}</div>
+  <div>{{ if .EventNext }}<a href="{{ .EventNext }}" class="secondary pager-link">Older →</a>{{ else }}<span class="u-text-dim">Older →</span>{{ end }}</div>
+</div>
+{{ end }}
+{{end}}

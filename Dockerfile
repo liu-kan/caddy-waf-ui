@@ -1,6 +1,5 @@
 # Stage 1: Build (builder)
-# Exact toolchain pin: go.mod declares go 1.26.6 (GOTOOLCHAIN=auto does not
-# download versions on each build - reproducibility, no float).
+# Exact builder toolchain pin; it satisfies the minimum in go.mod.
 FROM golang:1.27.1-alpine AS builder
 
 # Enable Go modules and configure the working directory
@@ -28,8 +27,8 @@ FROM alpine:3.23.5
 
 # Static OCI metadata (supply chain: trace the artifact origin and license)
 LABEL org.opencontainers.image.title="caddy-waf-ui"
-LABEL org.opencontainers.image.description="Self-hosted sidecar management UI for caddy-waf: per-site WAF mode, CRS exclusions, IP rules, log viewer, and rollback"
-LABEL org.opencontainers.image.source="https://github.com/developmi/caddy-waf-ui"
+LABEL org.opencontainers.image.description="Sidecar management UI for Caddy with Coraza: WAF mode, exclusions, client IP rules, logs, and rollback"
+LABEL org.opencontainers.image.source="https://github.com/liu-kan/caddy-waf-ui"
 LABEL org.opencontainers.image.licenses="MIT"
 
 # Install root certificates and timezone data (useful for logs and Cloudflare API calls),
@@ -37,13 +36,13 @@ LABEL org.opencontainers.image.licenses="MIT"
 # named volumes inherit the directory ownership on first mount, avoiding permission
 # errors (EACCES) in ui-managed/ and backups/. Pinned package versions (DL3018).
 #
-# TRANSITIONAL PIN — openssl=3.5.8-r0 removes CVE-2026-14456 (OpenSSL 3.5.7-r0 → 3.5.8-r0; the
-# fixed version is already available in APKINDEX v3.23/main and v3.24/main). REMOVE this pin
-# once alpine 3.23.6 or 3.24.2 publish the fixed version.
-RUN apk --no-cache add ca-certificates=20260909-r0 openssl=3.5.8-r0 tzdata=2026d-r0 \
-    && adduser -D -g '' uiuser \
-    && mkdir -p /ui-managed /backups \
-    && chown -R uiuser:uiuser /ui-managed /backups
+# Pin versions currently available in Alpine v3.23/main. OpenSSL 3.5.9
+# supersedes the removed 3.5.8 package pin; refresh pins with repository updates.
+RUN apk --no-cache add ca-certificates=20260909-r0 openssl=3.5.9-r0 tzdata=2026d-r0 \
+    && addgroup -g 65532 -S uiuser \
+    && adduser -u 65532 -S -D -G uiuser -g '' uiuser \
+    && mkdir -p /ui-managed /backups /data/logs /config /run/caddy-admin \
+    && chown -R uiuser:uiuser /ui-managed /backups /data /config /run/caddy-admin
 
 USER uiuser
 

@@ -73,6 +73,30 @@
   </div>
 </div>
 
+<!-- WAF events of the last 24 hours (event store) -->
+{{ with .Report }}
+<div class="card-box">
+  <div class="card-box-header">
+    <div>
+      <h2 class="card-title">WAF events — last 24 hours</h2>
+      <small class="u-text-faint">{{ .Blocked }} blocked · {{ .WouldBlock }} would block · {{ .Detected }} below threshold · {{ .Sources }} source(s) · {{ len .Attackers }} likely attacker(s) · {{ len .FPCandidates }} false-positive candidate(s)</small>
+    </div>
+    <a href="?tab=analysis&amp;range=24h" class="secondary outline btn-compact">Analyze →</a>
+  </div>
+  <div class="card-box-body">
+    {{ if .Rules }}
+      <div class="u-flex u-wrap u-gap">
+        {{ range $i, $r := .Rules }}{{ if lt $i 8 }}
+          <a href="/?tab=rules&amp;id={{ $r.ID }}" class="rule-pill rule-pill--{{ $r.Rule.Kind }}" title="{{ $r.Rule.Msg }}">{{ $r.ID }} × {{ $r.Events }}</a>
+        {{ end }}{{ end }}
+      </div>
+    {{ else }}
+      <p class="card-box-empty">No rule matched in the last 24 hours.</p>
+    {{ end }}
+  </div>
+</div>
+{{ end }}
+
 <!-- Managed Per-Site WAF Domains Table -->
 <div class="card-box">
   <div class="card-box-header">

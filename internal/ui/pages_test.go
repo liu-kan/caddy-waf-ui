@@ -98,6 +98,7 @@ func seedRollbackEnv(t *testing.T, snapshots map[string]string) {
 	managedDir := t.TempDir()
 	backupDir := t.TempDir()
 	t.Setenv("CADDY_UI_MANAGED_DIR", managedDir)
+	t.Setenv("CADDY_UI_DATA_DIR", t.TempDir())
 	t.Setenv("CADDY_UI_BACKUP_DIR", backupDir)
 
 	overlay := filepath.Join(managedDir, "waf-api_example_com.conf")

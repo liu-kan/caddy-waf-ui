@@ -1,0 +1,104 @@
+{{define "content"}}
+{{ if .CurrentSite }}
+<div class="top-banner">
+  <div class="u-flex u-between u-wrap u-gap-lg">
+    <div>
+      <h1 class="banner-title banner-title-base">🎚️ CRS Policy — {{ .CurrentSite.Domain }}</h1>
+      <p class="banner-sub">
+        Mode <strong>{{ .CurrentSite.Mode }}</strong> (change it on <a href="/?tab=sites&amp;domain={{ .CurrentSite.Domain }}">Domains &amp; WAF</a>).
+        Settings are rendered as <code>SecAction</code> rules 9001000–9001005 after the CRS setup and before the rules load.
+      </p>
+    </div>
+    <form method="GET" action="/" class="domain-select-form">
+      <input type="hidden" name="tab" value="policy">
+      <label class="domain-select-label" for="domain">Select Domain:</label>
+      <select name="domain" id="domain" class="domain-select">
+        {{ range .Sites }}<option value="{{ .Domain }}" {{ if eq .Domain $.CurrentSite.Domain }}selected{{ end }}>{{ .Domain }}</option>{{ end }}
+      </select>
+      <button type="submit" class="secondary btn-compact">Go</button>
+    </form>
+  </div>
+</div>
+
+{{ if .FormError }}
+<div class="toast-notice toast-notice--error" role="alert"><span>⚠️ {{ .FormError }}</span></div>
+{{ end }}
+
+<form method="POST" action="/sites/{{ .CurrentSite.Domain }}/policy" class="card-box card-box--padded">
+  <input type="hidden" name="csrf" value="{{ .CSRF }}">
+  <input type="hidden" name="domain" value="{{ .CurrentSite.Domain }}">
+  <input type="hidden" name="tab" value="policy">
+  <div class="grid">
+    <div>
+      <h2 class="card-title card-title-spaced">Paranoia level</h2>
+      <label>Blocking level (rules that add to the blocking score)
+        <select name="blocking_pl">
+          {{ range $l := (list 1 2 3 4) }}<option value="{{ $l }}" {{ if eq (printf "%d" $l) $.PolicyForm.BlockingPL }}selected{{ end }}>{{ $l }}{{ if eq $l 1 }} — baseline, rare false positives{{ else if eq $l 2 }} — encoded and obfuscated attacks, some false positives{{ else if eq $l 3 }} — strict, frequent false positives{{ else }} — paranoid, only for small controlled APIs{{ end }}</option>{{ end }}
+        </select>
+      </label>
+      <label>Detection level (executed and logged, never blocking)
+        <select name="detection_pl">
+          {{ range $l := (list 1 2 3 4) }}<option value="{{ $l }}" {{ if eq (printf "%d" $l) $.PolicyForm.DetectionPL }}selected{{ end }}>{{ $l }}</option>{{ end }}
+        </select>
+        <small>Set it to blocking + 1 for a week before raising the blocking level: the impact estimate then knows what the next level would block.</small>
+      </label>
+    </div>
+    <div>
+      <h2 class="card-title card-title-spaced">Anomaly thresholds</h2>
+      <label>Inbound threshold (rule 949110; critical match = 5)
+        <input type="number" name="inbound_threshold" min="1" max="10000" value="{{ .PolicyForm.Inbound }}" required>
+      </label>
+      <label>Outbound threshold (rule 959100)
+        <input type="number" name="outbound_threshold" min="1" max="10000" value="{{ .PolicyForm.Outbound }}" required>
+      </label>
+      <label><input type="checkbox" name="early_blocking" {{ if .PolicyForm.EarlyBlocking }}checked{{ end }}> Early blocking (decide after phases 1 and 3 too)</label>
+      <label><input type="checkbox" name="tuning" {{ if .PolicyForm.Tuning }}checked{{ end }}> Tuning mode: also record requests with any score below the threshold</label>
+      <small>Without tuning mode Coraza only records blocked (or would-be-blocked) requests, so lowering a threshold or raising a level cannot be estimated. It increases the audit volume.</small>
+    </div>
+  </div>
+  <div class="grid">
+    <div>
+      <h2 class="card-title card-title-spaced">Request policy</h2>
+      <label>Allowed methods (empty = CRS default: GET HEAD POST OPTIONS)
+        <input type="text" name="allowed_methods" value="{{ .PolicyForm.Methods }}" placeholder="GET HEAD POST OPTIONS PUT PATCH DELETE" class="u-mono">
+      </label>
+      <label>Allowed request content types (empty = CRS default)
+        <input type="text" name="allowed_content_types" value="{{ .PolicyForm.ContentTypes }}" placeholder="application/json multipart/form-data application/x-www-form-urlencoded" class="u-mono">
+      </label>
+      <label>Largest request body inspected, bytes (empty = baseline, 13107200)
+        <input type="number" name="request_body_limit" min="0" value="{{ .PolicyForm.BodyLimit }}" class="u-mono">
+      </label>
+    </div>
+    <div>
+      <h2 class="card-title card-title-spaced">Disabled rule groups</h2>
+      <div class="check-grid">
+        {{ range .Groups }}<label><input type="checkbox" name="disabled_groups" value="{{ .ID }}" {{ if .Checked }}checked{{ end }}> {{ .Label }}</label>{{ end }}
+      </div>
+      <small>Prefer exclusions: a disabled group stops every rule of that file for the whole site.</small>
+    </div>
+  </div>
+  <label>Reason (recorded in the change history)
+    <input type="text" name="reason" value="{{ .PolicyForm.Reason }}" placeholder="e.g. raise to PL2 after a week of detection-only data" maxlength="500">
+  </label>
+  <div class="u-flex u-gap">
+    <button type="submit" name="action" value="preview" class="secondary">Preview diff and impact</button>
+    <button type="submit" name="action" value="apply" class="primary" data-require-reason>Apply policy</button>
+  </div>
+</form>
+
+{{ if .PolicyImpact }}
+{{ template "impact" .PolicyImpact }}
+{{ end }}
+{{ if .PolicyPreview }}
+<div class="card-box">
+  <div class="card-box-header"><span class="file-badge">Generated overlay changes: <strong>waf-{{ slug .CurrentSite.Domain }}.conf</strong></span></div>
+  <div class="code-view">{{ if .PolicyPreview.Diff }}<pre class="diff">{{ .PolicyPreview.Diff }}</pre>{{ else }}<pre>No change to the generated configuration.</pre>{{ end }}</div>
+</div>
+{{ end }}
+{{ else }}
+<div class="card-box card-box--padded">
+  <h1 class="banner-title">No Managed Domains</h1>
+  <p class="card-box-empty">No managed domains registered yet.</p>
+</div>
+{{ end }}
+{{end}}

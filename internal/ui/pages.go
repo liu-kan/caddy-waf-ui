@@ -28,27 +28,6 @@ func managedDir() string {
 	return config.ManagedDir()
 }
 
-// crsRule describes an entry of the fixed CRS rules catalog with known false
-// positives. The catalog is hardcoded (6 rules) and without simulate-attack
-// or AI (removed from the product).
-type crsRule struct {
-	RuleID      string
-	Category    string
-	Name        string
-	Description string
-}
-
-// crsCatalog is the catalog of CRS rules that the UI offers as one-click
-// exclusions, with their public description (UI copy in English).
-var crsCatalog = []crsRule{
-	{RuleID: "942100", Category: "SQLi", Name: "SQL Injection Detected via libinjection", Description: "Detects classic SQL injection payloads in request values."},
-	{RuleID: "941100", Category: "XSS", Name: "XSS Attack Detected via libinjection", Description: "Detects cross-site scripting payloads in request values."},
-	{RuleID: "930120", Category: "LFI", Name: "OS File Access Attempt", Description: "Detects path traversal attempts that read local files."},
-	{RuleID: "920420", Category: "Protocol", Name: "Request Content Type Is Not Allowed by Policy", Description: "Rejects request content types outside the configured policy."},
-	{RuleID: "932100", Category: "RCE", Name: "Remote Command Execution: Windows Command Injection", Description: "Detects Windows command injection attempts."},
-	{RuleID: "942200", Category: "SQLi", Name: "SQL Injection: MySQL Comment/Space Obfuscation", Description: "Detects MySQL comment/space obfuscated injection attempts."},
-}
-
 // pageData is the data model common to all SSR pages. Each template consumes
 // only the fields it needs; the views whose data comes from later phases
 // (logs, snapshots) arrive as an honest empty state with the shape already
@@ -73,7 +52,6 @@ type pageData struct {
 	LogPages         int
 	LogPrevURL       string
 	LogNextURL       string
-	CRSCatalog       []crsRule
 	ActiveExclusions []waf.Exclusion
 	ExclusionsConf   string
 	ActiveIPRules    iprules.IPRules
@@ -81,6 +59,8 @@ type pageData struct {
 	Snapshots        []files.BackupInfo
 	WafConf          string
 	Readback         caddy.ReadbackState
+
+	wafData
 }
 
 // flashMessage translates the ?flash= key to a visible message (English UI
@@ -96,6 +76,9 @@ func flashMessage(key string) string {
 	case "logged_out":
 		return "You have been signed out."
 	default:
+		if n, ok := strings.CutPrefix(key, "backfill:"); ok {
+			return "Loki backfill finished: " + n + " event(s) imported."
+		}
 		return key
 	}
 }
@@ -298,7 +281,6 @@ func buildPageData(r *http.Request, tab string, sites []*domain.Site) pageData {
 		Sites:        sites,
 		LogSearch:    q.Get("search"),
 		ActionFilter: q.Get("actionFilter"),
-		CRSCatalog:   crsCatalog,
 		Logs:         []logs.AuditEntry{},
 		Snapshots:    []files.BackupInfo{},
 	}
@@ -349,6 +331,7 @@ func buildPageData(r *http.Request, tab string, sites []*domain.Site) pageData {
 	}
 	data.TotalExclusions, data.TotalIPRules, data.TotalDenyIPs, data.TotalAllowIPs = countOverlays()
 	data.Readback = caddy.LastReadback()
+	buildWAFData(r, tab, &data)
 	return data
 }
 
@@ -423,6 +406,9 @@ func NewPagesMux() *http.ServeMux {
 	mux.HandleFunc("GET /", HandleIndex)
 	mux.HandleFunc("POST /sites/{domain}/mode", HandleFormSetMode)
 	mux.HandleFunc("POST /sites/{domain}/exclusions", HandleFormAddExclusion)
+	mux.HandleFunc("POST /sites/{domain}/exclusions/remove", HandleFormRemoveExclusion)
+	mux.HandleFunc("POST /sites/{domain}/policy", HandleFormPolicy)
+	mux.HandleFunc("POST /events/backfill", HandleFormBackfill)
 	mux.HandleFunc("POST /sites/{domain}/iprules", HandleFormAddIPRule)
 	mux.HandleFunc("POST /sites/{domain}/rollback", HandleFormRollback)
 	mux.HandleFunc("POST /logout", HandleLogout)

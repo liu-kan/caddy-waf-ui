@@ -24,7 +24,7 @@ var auditDirectives = []string{
 	"SecAuditEngine RelevantOnly",
 	"SecAuditLog " + defaultAuditPath,
 	"SecAuditLogFormat JSON",
-	"SecAuditLogParts ABCDEFGHIJKZ",
+	"SecAuditLogParts AHKZ",
 }
 
 // assertInlineOverlay verifies the R1 contract of the inline overlay (S1,
@@ -52,13 +52,12 @@ func assertInlineOverlay(t *testing.T, result, headerPrefix, slug, mode string) 
 		t.Errorf("the overlay must not declare the snippet (waf_%s) {:\n%s", slug, result)
 	}
 
-	// Full structural order: header → coraza_waf → SecRuleEngine → exclusions
-	// Include → audit directives → block close.
+	// Structural order: header, WAF, compiled exclusions, engine and audit.
 	order := []string{
 		headerPrefix,
 		"coraza_waf {",
+		"# ui-config-exclusions-begin",
 		"SecRuleEngine " + mode,
-		"Include /etc/caddy/ui-managed/exclusions-" + slug + ".conf",
 	}
 	order = append(order, auditDirectives...)
 
@@ -132,24 +131,14 @@ func TestGenerateSnippetHonorsAuditPath(t *testing.T) {
 // the caller passes (config.IncludeDir(), CADDY_UI_INCLUDE_DIR) - the CADDY
 // view of the volume, NOT a hardcoded value. A deployment with custom dirs
 // stops breaking silently.
-func TestGenerateSnippetHonorsIncludeDir(t *testing.T) {
-	site := &domain.Site{
-		Domain: "api.developmi.com",
-		Mode:   domain.ModeDetectionOnly,
-	}
-
-	customInclude := "/etc/caddy/custom-managed"
-	resultBytes, err := waf.GenerateSnippet(site, defaultAuditPath, customInclude)
+func TestGenerateSnippetNeedsNoExternalExclusionsFile(t *testing.T) {
+	site := &domain.Site{Domain: "api.example.com", Mode: domain.ModeDetectionOnly}
+	snippet, err := waf.GenerateSnippet(site, defaultAuditPath, "/custom/managed")
 	if err != nil {
-		t.Fatalf("GenerateSnippet failed unexpectedly: %v", err)
+		t.Fatal(err)
 	}
-
-	result := string(resultBytes)
-	if !strings.Contains(result, "Include "+customInclude+"/exclusions-api_developmi_com.conf") {
-		t.Errorf("the overlay must include the exclusions from CADDY_UI_INCLUDE_DIR (%s):\n%s", customInclude, result)
-	}
-	if strings.Contains(result, "Include /etc/caddy/ui-managed/exclusions-api_developmi_com.conf") {
-		t.Errorf("the overlay must not contain the hardcoded path when the caller passes another one:\n%s", result)
+	if strings.Contains(string(snippet), "Include /custom/managed") {
+		t.Fatal("new overlays must not depend on a missing exclusions file")
 	}
 }
 

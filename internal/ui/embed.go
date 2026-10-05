@@ -7,7 +7,9 @@ import (
 	"io/fs"
 	"time"
 
+	"github.com/developmi/caddy-waf-ui/internal/analysis"
 	"github.com/developmi/caddy-waf-ui/internal/domain"
+	"github.com/developmi/caddy-waf-ui/internal/waf"
 )
 
 //go:embed templates
@@ -31,11 +33,21 @@ var funcMap = template.FuncMap{
 		}
 	},
 	"slug": domain.DomainSlug,
+	"add":  func(a, b int) int { return a + b },
+	"sub":  func(a, b int) int { return a - b },
+	"mul":  func(a, b int) int { return a * b },
+	"list": func(values ...int) []int { return values },
+	// fpExclusionURL opens the exclusions form prefilled with the narrowest
+	// scope of a false-positive candidate.
+	"fpExclusionURL": func(c analysis.FPCandidate) string {
+		return exclusionURL(c.Site, c.Rule, c.Path, waf.PathExact, paramFromVar(c.Var))
+	},
 }
 
 // pageNames are the pages that define the "content" block over "base".
 // The file name matches the value of ?tab=.
-var pageNames = []string{"overview", "sites", "exclusions", "iprules", "logs", "rollback"}
+var pageNames = []string{"overview", "sites", "exclusions", "iprules", "logs", "rollback",
+	"events", "event", "rules", "analysis", "policy"}
 
 // templates contains a template set per page (base + content) and a
 // standalone template for login. They are parsed once when the package

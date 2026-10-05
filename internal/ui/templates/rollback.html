@@ -78,6 +78,36 @@
   </div>
 
 </div>
+<div class="card-box">
+  <div class="card-box-header">
+    <div>
+      <h2 class="card-title">Change history for {{ .CurrentSite.Domain }}</h2>
+      <small class="u-text-faint">Every attempted change with its reason, actor, result and generated revision. The same journal is shipped to Loki as kind="change" for Grafana annotations.</small>
+    </div>
+  </div>
+  <div class="table-scroll">
+    <table class="table-compact u-text-md">
+      <thead><tr><th scope="col">Time (UTC)</th><th scope="col">Change</th><th scope="col">Reason</th><th scope="col">By</th><th scope="col">Result</th><th scope="col">Revision</th></tr></thead>
+      <tbody>
+        {{ range .Changes }}
+          <tr>
+            <td class="cell-mono-muted">{{ date .TS "2006-01-02 15:04:05" }}</td>
+            <td>
+              <strong>{{ .Action }}</strong> — {{ .Summary }}
+              {{ if .Diff }}<details class="rule-comment"><summary>Diff</summary><pre class="diff">{{ .Diff }}</pre></details>{{ end }}
+            </td>
+            <td class="u-text-sm">{{ .Reason }}</td>
+            <td class="u-mono u-text-sm">{{ if .Actor }}{{ .Actor }}{{ else }}{{ .RemoteIP }}{{ end }}</td>
+            <td>{{ if eq .Result "success" }}<span class="badge-on">success</span>{{ else }}<span class="badge-deny" title="{{ .Error }}">failed</span>{{ end }}</td>
+            <td class="u-mono u-text-sm">{{ .Revision }}</td>
+          </tr>
+        {{ else }}
+          <tr><td colspan="6" class="table-empty">No recorded changes for this domain.</td></tr>
+        {{ end }}
+      </tbody>
+    </table>
+  </div>
+</div>
 {{ else }}
 <div class="card-box card-box--padded">
   <h1 class="banner-title">No Managed Domains</h1>

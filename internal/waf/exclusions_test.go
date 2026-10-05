@@ -43,49 +43,90 @@ func TestGenerateExclusions(t *testing.T) {
 			notIn: []string{"ARGS:"},
 		},
 		{
-			name: "exclusion with parameter q generates id 9000001 and target ARGS:q",
+			name: "parameter-only exclusion removes just that target after CRS loads",
 			exclusions: []waf.Exclusion{
 				{Type: waf.ExcludeByID, Value: "941100", Param: "q"},
 			},
 			wantErr: false,
 			fragments: []string{
-				`SecRule ARGS:q "@unconditionalMatch" "id:9000001,phase:2,pass,nolog,ctl:ruleRemoveById=941100"`,
+				`SecRuleUpdateTargetById 941100 "!ARGS:q"`,
+				`# ui-exclusion: {"type":"id","value":"941100","param":"q"}`,
 			},
-			notIn: []string{"SecRuleRemoveById 941100\n"},
+			notIn: []string{"SecRuleRemoveById 941100\n", "ctl:ruleRemoveById=941100", "@unconditionalMatch"},
 		},
 		{
-			name: "two parameterized exclusions get consecutive ids 9000001 and 9000002",
+			name: "path-scoped exclusions get consecutive runtime ids 9000001 and 9000002",
 			exclusions: []waf.Exclusion{
-				{Type: waf.ExcludeByID, Value: "941100", Param: "q"},
-				{Type: waf.ExcludeByID, Value: "942100", Param: "id"},
+				{Type: waf.ExcludeByID, Value: "941100", Param: "q", Path: "/search"},
+				{Type: waf.ExcludeByID, Value: "942100", Path: "/api/import", PathMatch: waf.PathExact},
 			},
 			wantErr: false,
 			fragments: []string{
-				"id:9000001", "ARGS:q",
-				"id:9000002", "ARGS:id",
+				`SecRule REQUEST_FILENAME "@beginsWith /search" "id:9000001,phase:1,pass,t:none,nolog,ctl:ruleRemoveTargetById=941100;ARGS:q"`,
+				`SecRule REQUEST_FILENAME "@streq /api/import" "id:9000002,phase:1,pass,t:none,nolog,ctl:ruleRemoveById=942100"`,
 			},
 		},
 		{
-			name: "duplicates deduplicated: same type+value+param does not consume a new id",
+			name: "duplicates deduplicated: same rule and scope does not consume a new id",
 			exclusions: []waf.Exclusion{
-				{Type: waf.ExcludeByID, Value: "941100", Param: "q"},
-				{Type: waf.ExcludeByID, Value: "941100", Param: "q"},
+				{Type: waf.ExcludeByID, Value: "941100", Param: "q", Path: "/a"},
+				{Type: waf.ExcludeByID, Value: "941100", Param: "q", Path: "/a", PathMatch: waf.PathPrefix},
 			},
 			wantErr: false,
 			fragments: []string{
-				"id:9000001", "ARGS:q", "ctl:ruleRemoveById=941100",
+				"id:9000001", "ctl:ruleRemoveTargetById=941100;ARGS:q",
 			},
 			notIn: []string{"9000002"},
 		},
 		{
-			name: "tag with parameter generates targeted ruleRemoveByTag",
+			name: "tag with parameter generates a tag target update",
 			exclusions: []waf.Exclusion{
 				{Type: waf.ExcludeByTag, Value: "attack-xss", Param: "q"},
 			},
 			wantErr: false,
 			fragments: []string{
-				`ctl:ruleRemoveByTag=attack-xss`, "ARGS:q",
+				`SecRuleUpdateTargetByTag "attack-xss" "!ARGS:q"`,
 			},
+		},
+		{
+			name: "JSON key and key pattern parameters",
+			exclusions: []waf.Exclusion{
+				{Type: waf.ExcludeByID, Value: "932235", Param: "json.messages.0.content", Path: "/api/chat"},
+				{Type: waf.ExcludeByID, Value: "942100", Param: `/^json\.messages\.\d+\.content$/`},
+			},
+			wantErr: false,
+			fragments: []string{
+				"ctl:ruleRemoveTargetById=932235;ARGS:json.messages.0.content",
+				`SecRuleUpdateTargetById 942100 "!ARGS:/^json\.messages\.\d+\.content$/"`,
+			},
+		},
+		{
+			name: "pattern with a pipe rejected",
+			exclusions: []waf.Exclusion{
+				{Type: waf.ExcludeByID, Value: "941100", Param: "/a|b/"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "path with quote rejected",
+			exclusions: []waf.Exclusion{
+				{Type: waf.ExcludeByID, Value: "941100", Path: `/a" "id:1`},
+			},
+			wantErr: true,
+		},
+		{
+			name: "path must be absolute",
+			exclusions: []waf.Exclusion{
+				{Type: waf.ExcludeByID, Value: "941100", Path: "api"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "note with backtick rejected",
+			exclusions: []waf.Exclusion{
+				{Type: waf.ExcludeByID, Value: "941100", Note: "x`y"},
+			},
+			wantErr: true,
 		},
 		{
 			name: "parameter with only spaces rejected",
@@ -194,5 +235,65 @@ func TestValidateExclusions(t *testing.T) {
 	}
 	if err := waf.ValidateExclusions(invalid); err == nil {
 		t.Fatal("expected error for invalid exclusion type, got nil")
+	}
+	for _, id := range []string{"949110", "959100", "901500", "9000001"} {
+		if err := waf.ValidateExclusions([]waf.Exclusion{{Type: waf.ExcludeByID, Value: id}}); err == nil {
+			t.Errorf("rule %s must not be offered as an exclusion", id)
+		}
+	}
+	if err := waf.ValidateExclusions([]waf.Exclusion{{Type: waf.ExcludeByID, Value: "1000001"}}); err != nil {
+		t.Errorf("unknown (operator custom) rule ids remain excludable: %v", err)
+	}
+}
+
+func TestParseExclusionsRoundTripAndLegacyMigration(t *testing.T) {
+	site := &domain.Site{Domain: "example.com"}
+	want := []waf.Exclusion{
+		{Type: waf.ExcludeByID, Value: "942100", Param: "json.text", Path: "/api/ask", PathMatch: waf.PathPrefix, Note: "chat messages \"quoted\""},
+		{Type: waf.ExcludeByTag, Value: "attack-xss"},
+	}
+	content, err := waf.GenerateExclusions(site, want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := waf.ParseExclusions(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("round trip: got %+v", got)
+	}
+
+	legacy := "# Caddy WAF UI managed - do not edit manually\n# domain: example.com | updated: 2026-01-01T00:00:00Z\n" +
+		"SecRuleRemoveById 941100\n" +
+		"SecRuleRemoveByTag \"attack-sqli\"\n" +
+		"SecRule ARGS:q \"@unconditionalMatch\" \"id:9000001,phase:2,pass,nolog,ctl:ruleRemoveById=942100\"\n"
+	got, err = waf.ParseExclusions([]byte(legacy))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 || got[2] != (waf.Exclusion{Type: waf.ExcludeByID, Value: "942100", Param: "q"}) {
+		t.Fatalf("legacy parse: %+v", got)
+	}
+	if _, err := waf.ParseExclusions([]byte("SecRuleEngine Off\n")); err == nil {
+		t.Fatal("unknown directives must be rejected")
+	}
+	stored := []byte(`# ui-exclusion: {"type":"id","value":"949110"}` + "\n")
+	if _, err := waf.ParseExclusions(stored); err != nil {
+		t.Fatalf("stored entries are only syntax-checked so the site stays manageable: %v", err)
+	}
+}
+
+func TestExclusionDescribe(t *testing.T) {
+	cases := map[string]waf.Exclusion{
+		"remove rule 942100 for the whole site":                 {Type: waf.ExcludeByID, Value: "942100"},
+		"skip ARGS:q in rule 942100 for the whole site":         {Type: waf.ExcludeByID, Value: "942100", Param: "q"},
+		"remove rules tagged attack-xss for paths under /admin": {Type: waf.ExcludeByTag, Value: "attack-xss", Path: "/admin"},
+		"skip ARGS:text in rule 941100 for path /api/ask":       {Type: waf.ExcludeByID, Value: "941100", Param: "text", Path: "/api/ask", PathMatch: waf.PathExact},
+	}
+	for want, ex := range cases {
+		if got := ex.Describe(); got != want {
+			t.Errorf("Describe(%+v) = %q, want %q", ex, got, want)
+		}
 	}
 }

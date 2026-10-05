@@ -33,7 +33,7 @@ func TestConfigDefaults(t *testing.T) {
 		{"BackupDir", config.BackupDir(), "/backups"},
 		{"AuditLogPath", config.AuditLogPath(), "/data/logs/coraza-audit.log"},
 		{"CaddyfilePath", config.CaddyfilePath(), "/etc/caddy/Caddyfile"},
-		{"AdminURL", config.AdminURL(), "http://caddy-waf:2019"},
+		{"AdminURL", config.AdminURL(), "http://caddy:2019"},
 		{"IncludeDir", config.IncludeDir(), "/etc/caddy/ui-managed"},
 		{"BindAddr", config.BindAddr(), "0.0.0.0:8080"},
 		{"LogLevel", config.LogLevel(), "info"},
