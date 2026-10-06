@@ -154,3 +154,31 @@ func TestStandardHidesUnkeyedAggregateVariables(t *testing.T) {
 		t.Fatal("unkeyed aggregate values were classified as safe", string(b))
 	}
 }
+
+// 2026-10-06 09:00: verify attack URIs with invalid percent-encodings (%zz, %u0027)
+// retain diagnostic path info while credentials in query remain redacted.
+func TestRawURIFallbackOnMalformedURIs(t *testing.T) {
+	policy := Redaction{Level: LevelStandard}
+	malformed := "/login?path=%zz%u0027&password=MY_SECRET#token=SECRET"
+	got := policy.URI(malformed)
+	if strings.Contains(got, "MY_SECRET") || strings.Contains(got, "SECRET") {
+		t.Fatalf("credential leaked from malformed URI: %s", got)
+	}
+	if !strings.Contains(got, "%zz%u0027") {
+		t.Fatalf("attack payload path wiped out completely: %s", got)
+	}
+}
+
+// 2026-10-06 09:00: verify unmodified JSON payloads retain unescaped HTML characters (<script>)
+// instead of converting to unicode escapes (\u003cscript\u003e).
+func TestJSONXSSPayloadNotEscapedWhenUnmodified(t *testing.T) {
+	policy := Redaction{Level: LevelStandard}
+	e := &Event{Hits: []Hit{{Var: "REQUEST_BODY", Data: "<script>", Value: `{"search":"<script>alert(1)</script>"}`}}}
+	res := policy.Apply(e)
+	if strings.Contains(res.Hits[0].Value, `\u003c`) {
+		t.Fatalf("XSS payload was HTML-escaped: %s", res.Hits[0].Value)
+	}
+	if !strings.Contains(res.Hits[0].Value, "<script>") {
+		t.Fatalf("payload content altered: %s", res.Hits[0].Value)
+	}
+}

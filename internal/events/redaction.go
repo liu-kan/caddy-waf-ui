@@ -213,7 +213,10 @@ var (
 	// formPair is a key=value pair of a query string or form body; jsonPair
 	// a "key": value member of a JSON document.
 	formPair = regexp.MustCompile(`([A-Za-z0-9_.~%\[\]-]+)=([^&\s"]*)`)
-	jsonPair = regexp.MustCompile(`"([^"\\]{1,128})"(\s*:\s*)("(?:[^"\\]|\\.)*"?|[^,}\]\s]+)`)
+	// 2026-10-06 08:58: exclude '{', '[', and ':' from unquoted scalar values
+	// so opening braces of nested objects (e.g. "q":{"password":...}) are not
+	// eaten greedily, allowing inner sensitive keys to be caught by regex.
+	jsonPair = regexp.MustCompile(`"([^"\\]{1,128})"(\s*:\s*)("(?:[^"\\]|\\.)*"?|[^,{}\[\]:\s]+)`)
 )
 
 // pairs hides the values of sensitive names inside a composite value (a
@@ -229,19 +232,21 @@ func (r Redaction) pairs(s string) string {
 		dec := json.NewDecoder(strings.NewReader(s))
 		dec.UseNumber()
 		if dec.Decode(&value) == nil {
-			// 2026-10-06 08:50: an unchanged document is returned verbatim, and a
+			// 2026-10-06 08:50: an unchanged document is kept as is, and a
 			// changed one is encoded without HTML escaping, so XSS payloads such
 			// as <script> stay readable instead of becoming \u003cscript\u003e.
-			if !r.jsonValue(value, "", 0) {
-				return s
+			// Never return early here: duplicate JSON members or shadowed keys
+			// lost during map decoding must still be caught by jsonPair below.
+			if r.jsonValue(value, "", 0) {
+				var out strings.Builder
+				enc := json.NewEncoder(&out)
+				enc.SetEscapeHTML(false)
+				if enc.Encode(value) == nil {
+					s = strings.TrimSuffix(out.String(), "\n")
+				} else {
+					s = redacted
+				}
 			}
-			var out strings.Builder
-			enc := json.NewEncoder(&out)
-			enc.SetEscapeHTML(false)
-			if enc.Encode(value) == nil {
-				return strings.TrimSuffix(out.String(), "\n")
-			}
-			return redacted
 		}
 	}
 	s = jsonPair.ReplaceAllStringFunc(s, func(m string) string {
