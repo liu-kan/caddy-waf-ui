@@ -94,6 +94,12 @@
   </div>
 </div>
 
+<div class="card-box card-box--padded">
+ <h2 class="card-title">Request context and privacy</h2>
+ <p>View level {{ $e.Redaction }} · configured local {{ .LocalLevel }} · effective cloud {{ .CloudLevel }}. Previously removed details cannot be restored. Configure levels and name overrides in the deployment environment.</p>
+ {{ if $e.Query }}<p><strong>Query:</strong> <code>{{ $e.Query }}</code></p>{{ end }}
+ {{ if $e.Headers }}<details><summary>Retained request headers</summary><dl>{{ range $name,$value := $e.Headers }}<dt><code>{{ $name }}</code></dt><dd><code>{{ $value }}</code></dd>{{ end }}</dl></details>{{ end }}
+</div>
 <form method="POST" action="/events/{{ $e.TxID }}/feedback" class="card-box card-box--padded">
  <input type="hidden" name="csrf" value="{{ .CSRF }}"><input type="hidden" name="node" value="{{ $e.Node }}"><input type="hidden" name="ts" value="{{ date $e.TS "2006-01-02T15:04:05.999999999Z07:00" }}"><input type="hidden" name="source" value="{{ .HistoryBackend }}"><input type="hidden" name="tab" value="event"><input type="hidden" name="tx" value="{{ $e.TxID }}">
  <h2 class="card-title">Operator review</h2>{{ with .Feedback }}<p>{{ .Decision }} · {{ .Reason }} · {{ date .Updated "2006-01-02 15:04" }} UTC</p>{{ end }}
@@ -107,9 +113,9 @@
   <div class="card-box-header">
     <div>
       <h2 class="card-title">Local match context</h2>
-      <small class="u-text-faint">Read on demand from this node's raw audit log or its rotated archives (kept 48 hours). Never stored in events or sent to Grafana Cloud. Credential-like variables stay hidden.</small>
+      <small class="u-text-faint">Read on demand from this node's raw audit log or its rotated archives (kept 48 hours). Read-only display follows the configured local redaction level ({{ .LocalLevel }}). This lookup never writes or exports its results.</small>
     </div>
-    {{ if not .LocalRecord }}<a class="secondary outline btn-compact" href="/?tab=event&amp;tx={{ $e.TxID }}&amp;node={{ $e.Node }}&amp;raw=1">Show matched values</a>{{ end }}
+    {{ if not .LocalRecord }}<a class="secondary outline btn-compact" href="/?tab=event&amp;tx={{ $e.TxID }}&amp;node={{ $e.Node }}&amp;source={{ .HistoryBackend }}&amp;ts={{ date $e.TS "2006-01-02T15:04:05.999999999Z07:00" }}&amp;raw=1">Show matched values</a>{{ end }}
   </div>
   {{ with .LocalRecord }}
   <div class="card-box-body">

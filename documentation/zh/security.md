@@ -53,14 +53,9 @@ Compose 只把 UI 发布到宿主机的 `127.0.0.1:8080`。`Secure` Cookie 只�
 | 变更历史中的操作人、原因、错误、diff | 是 | 否 |
 | 草稿、快照、误报判定 | 是 | 否 |
 
-`CADDY_UI_MATCHED_VALUES=true` 时，事件保留匹配片段（最长 160 字符）和值（最长 200 字符），并随事件上传。以下内容在任何设置下都隐藏，本地匹配内容中也一样：
+现在使用本地和云端独立的 strict/standard/full 策略及 hide/keep 名单，详见 [可配置脱敏](redaction.md)。表中的“默认”指 strict。standard 隐藏识别出的凭据；显式 full 会保留已采集的凭据，除非 hide 命中。Show matched values 和旧日志页面都服从当前本地策略。
 
-- Cookie 和 `Set-Cookie`；
-- `Authorization`、`Proxy-Authorization`、`X-API-Key`、`API-Key`、`X-Auth-Token`、`X-Access-Token`、`X-CSRF-Token`、`X-XSRF-Token` 请求头；
-- 名称中含 `pass`、`pwd`、`secret`、`token`、`apikey`、`api_key`、`auth`、`session`、`sess`、`csrf`、`xsrf`、`otp`、`totp`、`credential`、`private`、`signature`、`jwt`、`bearer` 的参数；
-- 无法解析出变量名的匹配内容。
-
-仍需自行评估的部分：路径本身可能带令牌（例如重置密码链接），参数名可能透露业务信息，自定义规则的消息可能引用请求内容。`CADDY_UI_MATCHED_VALUES` 只用于短期诊断，用完关闭。
+原始文件不被这些配置改写；路径、参数名和自由文本仍需要按应用语义评估。改变级别不会删除以前排队或已经上传的数据。
 
 ## 文件与容器
 
@@ -76,3 +71,7 @@ Compose 只把 UI 发布到宿主机的 `127.0.0.1:8080`。`Secure` Cookie 只�
 - API 直接应用，面向自动化，同样有校验、快照、变更历史和失败补偿。
 - 源站探测地址只来自 `CADDY_UI_PROBE_URLS`，不由请求决定；只发 GET，不跟随重定向，校验 TLS 证书。
 - Loki 地址、令牌和选择器都是运维配置，用户无法指定任意查询地址。
+
+## 可调节脱敏
+
+请以 [可配置脱敏](redaction.md) 为准：strict 隐藏值，standard 隐藏识别出的凭据，显式 full 可以保留凭据，仅受 hide 名单约束。本地原始查看也遵守当前本地级别，不会绕过 strict。原始文件本身不被改写；Alloy 只读取独立云端队列。

@@ -1,116 +1,177 @@
 package events
 
 import (
-	"bufio"
-	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
+	"time"
 )
 
-// LocalMatch is the match context of one rule recovered from the raw local
-// audit record.
+// LocalMatch is match context recovered on demand from a raw audit record.
 type LocalMatch struct {
-	ID       int
-	Var      string
-	Data     string
-	Value    string
-	Redacted bool
+	ID               int
+	Var, Data, Value string
+	Redacted         bool
 }
-
-// LocalRecord is the local-only request context of an event. Normalized
-// events never carry matched values unless explicitly enabled; operators
-// can still review them here while the raw audit file or its rotated
-// archives exist. Nothing found here is stored or shipped.
 type LocalRecord struct {
-	File    string
-	Method  string
-	URI     string
-	Matches []LocalMatch
+	File, Method, URI, Redaction string
+	Headers                      map[string]string
+	Matches                      []LocalMatch
 }
 
-var (
-	// ErrLocalRecordNotFound means the raw record was rotated away (archives
-	// are kept for 48 hours) or the event came from another node.
-	ErrLocalRecordNotFound = errors.New("raw audit record not available locally")
-	txIDPattern            = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
-)
+var ErrLocalRecordNotFound = errors.New("raw audit record not available locally")
+var ErrLocalScanLimit = errors.New("local audit scan budget reached; use a newer event or retained normalized context")
+var txIDPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
 
-// maxLocalScan bounds the bytes scanned per lookup across all files.
-const maxLocalScan = 512 << 20
+const maxLocalScan = 64 << 20
 
-// FindLocalRecord looks for transaction tx in the raw Coraza audit log and
-// its rotated archives, newest first. Credential-like variables stay
-// redacted; other matched fragments are returned for local review.
-func FindLocalRecord(auditPath, tx string) (*LocalRecord, error) {
-	if !txIDPattern.MatchString(tx) {
+var localScanGate = make(chan struct{}, 1)
+
+// FindLocalRecord preserves the original convenience API. The standard
+// policy now also protects URL credentials and unclassified logdata.
+func FindLocalRecord(path, tx string) (*LocalRecord, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return FindLocalRecordWithPolicy(ctx, path, &Event{TxID: tx}, Redaction{Level: LevelStandard})
+}
+
+// FindLocalRecordWithPolicy never bypasses the configured local policy.
+// It accepts compact, formatted and concatenated JSON objects and limits
+// concurrent scans, elapsed time and total bytes for small deployments.
+func FindLocalRecordWithPolicy(ctx context.Context, auditPath string, event *Event, policy Redaction) (*LocalRecord, error) {
+	if event == nil || !txIDPattern.MatchString(event.TxID) {
 		return nil, errors.New("invalid transaction id")
 	}
-	archives, _ := filepath.Glob(auditPath + ".rotated-*")
+	select {
+	case localScanGate <- struct{}{}:
+		defer func() { <-localScanGate }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	archives, err := filepath.Glob(auditPath + ".rotated-*")
+	if err != nil {
+		return nil, err
+	}
 	sort.Sort(sort.Reverse(sort.StringSlice(archives)))
-	paths := append([]string{auditPath}, archives...)
-	needle := []byte(`"id":"` + tx + `"`)
 	budget := int64(maxLocalScan)
-	for _, path := range paths {
-		rec, scanned, err := scanForTransaction(path, needle, tx, budget)
-		budget -= scanned
+	for _, name := range append([]string{auditPath}, archives...) {
+		rec, n, err := scanLocalFile(ctx, name, event, budget)
+		budget -= n
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return nil, err
 		}
 		if rec != nil {
-			return localFromRecord(rec, path), nil
+			return localFromRecord(rec, name, policy), nil
 		}
 		if budget <= 0 {
-			break
+			return nil, ErrLocalScanLimit
 		}
 	}
 	return nil, ErrLocalRecordNotFound
 }
 
-func scanForTransaction(path string, needle []byte, tx string, budget int64) (*auditRecord, int64, error) {
-	f, err := os.Open(path) //nolint:gosec // G304: operator-configured audit log and its rotated archives.
+// deadlineReader is bounded independently of record boundaries, so a
+// single oversized or incomplete JSON object cannot exhaust scan memory.
+type deadlineReader struct {
+	ctx                              context.Context
+	reader                           io.Reader
+	remaining, read, recordRemaining int64
+}
+
+func (r *deadlineReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	if r.remaining <= 0 || r.recordRemaining <= 0 {
+		return 0, ErrLocalScanLimit
+	}
+	limit := min(r.remaining, r.recordRemaining)
+	if int64(len(p)) > limit {
+		p = p[:limit]
+	}
+	n, err := r.reader.Read(p)
+	r.remaining -= int64(n)
+	r.recordRemaining -= int64(n)
+	r.read += int64(n)
+	return n, err
+}
+func scanLocalFile(ctx context.Context, path string, event *Event, budget int64) (*auditRecord, int64, error) {
+	f, err := os.Open(path) //nolint:gosec // G304: operator-selected raw audit path and generated archives.
 	if err != nil {
 		return nil, 0, err
 	}
 	defer func() { _ = f.Close() }()
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 64*1024), 8<<20)
-	var scanned int64
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		scanned += int64(len(line) + 1)
-		if bytes.Contains(line, needle) {
-			var rec auditRecord
-			if json.Unmarshal(line, &rec) == nil && rec.Transaction.ID == tx {
-				return &rec, scanned, nil
+	r := &deadlineReader{ctx: ctx, reader: f, remaining: budget, recordRemaining: defaultChunk}
+	dec := json.NewDecoder(r)
+	for {
+		var rec auditRecord
+		if err := dec.Decode(&rec); err != nil {
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+				return nil, r.read, nil
+			}
+			return nil, r.read, err
+		}
+		r.recordRemaining = defaultChunk - (r.read - dec.InputOffset())
+		if rec.Transaction.ID != event.TxID {
+			continue
+		}
+		if !event.TS.IsZero() && (rec.Transaction.UnixTimestamp != 0 || rec.Transaction.Timestamp != "") {
+			ts := recordTime(rec.Transaction.Timestamp, rec.Transaction.UnixTimestamp)
+			if ts.Sub(event.TS) > time.Second || event.TS.Sub(ts) > time.Second {
+				continue
 			}
 		}
-		if scanned >= budget {
-			break
+		// A supplied Host also prevents transaction-id reuse selecting another site.
+		if event.Host != "" && rec.Transaction.Request != nil {
+			host := headerValue(rec.Transaction.Request.Headers, "host")
+			if host != "" && !strings.EqualFold(localHost(host), localHost(event.Host)) && !strings.EqualFold(localHost(rec.Transaction.ServerID), localHost(event.Host)) {
+				continue
+			}
 		}
+		return &rec, r.read, nil
 	}
-	return nil, scanned, scanner.Err()
 }
 
-func localFromRecord(rec *auditRecord, path string) *LocalRecord {
-	out := &LocalRecord{File: filepath.Base(path)}
+func localFromRecord(rec *auditRecord, path string, policy Redaction) *LocalRecord {
+	e := &Event{}
 	if rec.Transaction.Request != nil {
-		out.Method = rec.Transaction.Request.Method
-		out.URI = truncate(rec.Transaction.Request.URI, maxPathLen)
+		req := rec.Transaction.Request
+		e.Method = req.Method
+		e.Path, e.QueryKeys = splitURI(req.URI)
+		if u, err := url.ParseRequestURI(req.URI); err == nil {
+			e.Query = u.RawQuery
+		}
+		e.Headers = requestHeaders(req.Headers)
 	}
 	for _, m := range rec.Messages {
 		if m.Data == nil || m.Data.ID == 0 || (m.Data.Msg == "" && m.Data.Data == "") {
 			continue
 		}
-		v, data, value := splitLogdata(m.Data.Data)
-		lm := LocalMatch{ID: m.Data.ID, Var: v, Data: data, Value: value}
-		if v != "" && sensitiveVar.MatchString(v) {
-			lm.Data, lm.Value, lm.Redacted = redacted, redacted, true
-		}
-		out.Matches = append(out.Matches, lm)
+		variable, data, value := splitLogdataRaw(m.Data.Data)
+		e.Hits = append(e.Hits, Hit{ID: m.Data.ID, Var: variable, Data: data, Value: value})
+	}
+	e = policy.Apply(e)
+	out := &LocalRecord{File: filepath.Base(path), Method: e.Method, URI: e.Path, Headers: e.Headers, Redaction: e.Redaction}
+	if e.Query != "" {
+		out.URI += "?" + e.Query
+	}
+	for _, h := range e.Hits {
+		out.Matches = append(out.Matches, LocalMatch{ID: h.ID, Var: h.Var, Data: h.Data, Value: h.Value, Redacted: h.Data == redacted || h.Value == redacted})
 	}
 	return out
+}
+
+func localHost(host string) string {
+	if name, _, err := net.SplitHostPort(host); err == nil {
+		return strings.Trim(name, "[]")
+	}
+	return strings.Trim(host, "[]")
 }

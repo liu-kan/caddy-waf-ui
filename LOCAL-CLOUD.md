@@ -13,6 +13,7 @@ Default Compose budgets:
 | Alloy CPU ceiling | 0.5 CPU |
 | Full event cache | 1,000 events |
 | Local normalized events | 14 days, 128 MiB ceiling |
+| Separate cloud export queue | 14 days, 128 MiB ceiling, one-event cache |
 | Analysis / impact sample | 2,000 newest matching events |
 | Raw audit rotation threshold | 32 MiB, checked every 30 seconds |
 | Raw archive late-write grace | 48 hours after last modification |
@@ -52,7 +53,7 @@ For an existing deployment, merge the sidecar/data/init/Alloy entries following 
 
 | Kind | Cloud fields | Local-only data |
 | --- | --- | --- |
-| WAF event | Site, node, client IP, path, rule IDs, score, rule/variable metadata, mode and revision | Raw headers, bodies, query values; matched values hidden by default |
+| WAF event | Independently redacted event: strict by default, optionally standard/full | Raw audit file; detail removed by the cloud policy |
 | Access | Method, path, site as a JSON field, client IP, peer IP, status, duration and size | Headers, query, user agent |
 | Runtime | Timestamp, level, logger | Diagnostic message text |
 | Change | Site, action, result, revision, SHA256, stage names/results | Actor, reason, error text, diff, draft contents and feedback |
@@ -61,14 +62,14 @@ Loki indexes bounded labels: job/kind and, where appropriate, managed site, acti
 
 Coraza's `RelevantOnly` engine writes every response whose status matches the baseline `SecAuditLogRelevantStatus` (400–419, 500–519), including upstream 404/401/5xx responses without any rule match. The UI skips records without rule matches, so they never become events or cloud data; they only use raw-log disk space until rotation.
 
-The default `AHKZ` audit parts already contain method, URI and matched variables; `ABHKZ` additionally keeps request headers locally, which may contain secrets and are never cloud inputs. Neither includes request or response bodies. `CADDY_UI_MATCHED_VALUES=false` is the default; known credential variables and unrecognized logdata remain hidden even with explicit opt-in. Path/parameter names and operator-written rule messages can themselves be sensitive. The legacy Logs page shows raw local diagnostics to authenticated operators.
+The default `AHKZ` audit parts already contain method, URI and matched variables; `ABHKZ` additionally keeps request headers locally, which may contain secrets. Their normalized copies reach cloud only if the effective cloud policy retains them. Neither includes request or response bodies. Local and cloud redaction have separate strict/standard/full levels and hide/keep name overrides; see [REDACTION.md](REDACTION.md). Alloy reads `/ui-data/cloud/events`, not the richer local events. Path/parameter names and operator-written rule messages can themselves be sensitive. The legacy Logs page shows raw local diagnostics to authenticated operators.
 
 Access/runtime records currently support broader cloud observability; this local UI's forensic pages query WAF events and the local change journal. Use Grafana Explore for the extra streams. Optional `alloy/metrics.alloy.example` can be appended to a copy of the logs config, selected with `ALLOY_CONFIG_PATH`, and enabled with a separate UI metrics token plus the Grafana metrics endpoint/write token. Metrics export is off by default; per-rule counters are dropped by the example to control series count.
 
 ## Investigate and adjust a rule
 
 1. Open Events locally. Recent views read retained files; ranges longer than 24 hours use Loki when configured. Select Storage explicitly if needed, then filter by site, IP, path, action or rule. Older continues the cloud cursor; errors and incomplete timestamp-boundary history are visible.
-2. Open an event. Each rule shows its ID, meaning, severity, paranoia level, score role and source; curated Chinese notes explain common rules. Paste `930130,949110` or `"rule_ids_csv":"930130,949110"` into Rules to resolve several IDs together. Unknown IDs are displayed explicitly, and a CRS version mismatch warns against assuming the installed dictionary matches historical behavior. Mount the actual rule tree with `CADDY_UI_CRS_RULES_DIR` for a different CRS version. Mounted before/after rules also supply custom-rule explanations at UI startup. **Show matched values** reads the event's raw record on demand from this node's audit log or its 48-hour archives; the result is never stored or shipped, and credential variables stay hidden. A blocked event without a decision rule is usually the request body limit (HTTP 413 in On mode).
+2. Open an event. Each rule shows its ID, meaning, severity, paranoia level, score role and source; curated Chinese notes explain common rules. Paste `930130,949110` or `"rule_ids_csv":"930130,949110"` into Rules to resolve several IDs together. Unknown IDs are displayed explicitly, and a CRS version mismatch warns against assuming the installed dictionary matches historical behavior. Mount the actual rule tree with `CADDY_UI_CRS_RULES_DIR` for a different CRS version. Mounted before/after rules also supply custom-rule explanations at UI startup. **Show matched values** reads the event's raw record on demand from this node's audit log or its 48-hour archives; the lookup result is never stored or shipped and follows the configured local policy. A blocked event without a decision rule is usually the request body limit (HTTP 413 in On mode).
 3. For the example, **930130** detects a restricted file such as `.env`; **949110** is the inbound anomaly-threshold decision. Review the detection hit and request context. Disabling 949110 would disable a blocking decision and is not offered as a tuning exception.
 4. Follow Same path / Same client / Analyze this site. Analysis is heuristic, covers at most the newest 2,000 audited matches and does not represent total traffic. Truncated hits, early blocking, missing audit context and rules that never executed cannot be reconstructed. Re-enabling disabled groups may cause additional blocks that historical hits cannot predict.
 5. Record `Confirmed false positive` or `Confirmed attack` with a reason. This decision remains local and never automatically creates an allowlist or exception.

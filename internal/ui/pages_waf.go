@@ -28,19 +28,22 @@ const eventPageSize = 50
 // wafData carries the models of the event, rule, analysis and policy pages.
 // It is embedded in pageData so templates address its fields directly.
 type wafData struct {
-	HistoryError   string
-	HistoryWarning string
-	HistoryBackend string
-	HistorySource  string
-	CloudNext      string
-	StoreReady     bool
-	StoreStats     events.Stats
-	IngestReady    bool
-	Ingest         events.IngestStatus
-	LokiReady      bool
-	DictVersion    string
-	CRSSeen        []string
-	CRSMismatch    bool
+	HistoryError           string
+	HistoryWarning         string
+	HistoryBackend         string
+	HistorySource          string
+	CloudNext              string
+	LocalLevel, CloudLevel string
+	PipelineError          string
+	CloudStats             events.Stats
+	StoreReady             bool
+	StoreStats             events.Stats
+	IngestReady            bool
+	Ingest                 events.IngestStatus
+	LokiReady              bool
+	DictVersion            string
+	CRSSeen                []string
+	CRSMismatch            bool
 
 	EventRows    []eventRow
 	EventTotal   int
@@ -233,6 +236,11 @@ func fillStatus(d *wafData) {
 	if rt == nil {
 		return
 	}
+	d.LocalLevel, d.CloudLevel = rt.Redaction.Local.Level.String(), rt.Redaction.Cloud.Level.String()
+	d.PipelineError = rt.PipelineError
+	if rt.CloudStore != nil {
+		d.CloudStats = rt.CloudStore.Stats()
+	}
 	if rt.Store != nil {
 		d.StoreReady = true
 		d.StoreStats = rt.Store.Stats()
@@ -313,7 +321,7 @@ func buildEventsData(q url.Values, d *wafData) {
 		}
 		d.HistorySource = "Local retained files (memory cache does not limit history)"
 	}
-	d.EventRows = buildEventRows(list, dictionary())
+	d.EventRows = buildEventRows(displayEvents(list), dictionary())
 	d.EventTotal = total
 	d.EventPage = page
 	d.EventPages = (total + eventPageSize - 1) / eventPageSize
@@ -380,6 +388,7 @@ func buildEventDetail(q url.Values, d *wafData) {
 		return
 	}
 	dict := dictionary()
+	e = displayEvent(e)
 	d.Event = e
 	d.HistoryBackend = "local"
 	if e.Source == events.SourceLoki {
@@ -391,7 +400,9 @@ func buildEventDetail(q url.Values, d *wafData) {
 	d.LocalPossible = e.Node == "" || e.Node == config.NodeName()
 	if d.LocalPossible && q.Get("raw") == "1" {
 		// Read on demand only: matched values never enter the event files.
-		rec, err := events.FindLocalRecord(config.AuditLogPath(), e.TxID)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		rec, err := events.FindLocalRecordWithPolicy(ctx, config.AuditLogPath(), e, localRedaction())
 		if err != nil {
 			d.LocalRecordError = err.Error()
 		} else {

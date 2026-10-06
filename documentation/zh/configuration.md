@@ -52,7 +52,11 @@ UI 只通过环境变量配置。Compose 部署时写在 `.env`（权限 0600，
 | `CADDY_UI_EVENTS_RETENTION_DAYS` | 本地规范化事件保留天数（每日汇总另外长期保留） | `14` |
 | `CADDY_UI_EVENTS_DISK_MAX_MB` | 本地规范化事件文件的磁盘上限；到达上限后暂停读取，不删除未上传的事件 | `128` |
 | `CADDY_UI_EVENTS_MEMORY_MAX` | 内存中缓存的完整事件条数；更早的事件按磁盘偏移读取 | `1000` |
-| `CADDY_UI_MATCHED_VALUES` | `true` 时规范化事件保留匹配片段（仍隐藏凭据类变量和无法解析的内容）。会随事件上传云端，仅用于短期诊断 | `false` |
+| `CADDY_UI_REDACTION_LOCAL` | 本地 strict/standard/full；示例文件推荐 standard | Compose 未设时 strict |
+| `CADDY_UI_REDACTION_CLOUD` | 云端 strict/standard/full，有效级别不能宽于本地 | strict |
+| `CADDY_UI_REDACTION_HIDE` | 两端都隐藏的名称，优先于 keep | 空 |
+| `CADDY_UI_REDACTION_KEEP` | 覆盖 standard 内置判断的名称，不突破 strict/hide | 空 |
+| `CADDY_UI_CLOUD_DISK_MAX_MB` | 独立云端导出队列上限 | 128 |
 | `CADDY_UI_NODE` | 节点标识，写入每条事件。多台源站共用一个 Loki 时必须各不相同 | 主机名；Compose 中为 `caddy-local` |
 | `CADDY_UI_PROBE_URLS` | 每个站点的源站验证 URL，JSON 对象，例如 `{"chat.example.com":"https://origin.internal/__waf_health"}` | 空（跳过请求验证） |
 
@@ -95,3 +99,5 @@ UI 只通过环境变量配置。Compose 部署时写在 `.env`（权限 0600，
 | 分析与影响估算样本 | 最新 2,000 条匹配事件 |
 
 原始审计日志的归档、快照、草稿、汇总和 Alloy 位置文件另占磁盘，不计入 128 MiB。审计目录按两天的轮转量预留空间。
+
+三级含义、配置例子和迁移行为见 [可配置脱敏](redaction.md)。旧 MATCHED_VALUES 仅保留裸二进制兼容，应迁移到新变量。

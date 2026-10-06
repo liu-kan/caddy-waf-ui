@@ -121,3 +121,11 @@ func TestRun(t *testing.T) {
 		t.Error("expected serve callback to be invoked")
 	}
 }
+
+func TestInvalidPrivacySettingsPreventStartup(t *testing.T) {
+	t.Setenv("CADDY_UI_REDACTION_LOCAL", "typo")
+	called := false
+	if err := run(func(*http.Server) error { called = true; return nil }); err == nil || called {
+		t.Fatal("invalid privacy configuration silently started")
+	}
+}

@@ -404,11 +404,24 @@ func TestWAFAPI(t *testing.T) {
 func TestEventDetailShowsLocalMatchContextOnDemand(t *testing.T) {
 	setupUIEnv(t)
 	evs := setupWAFRuntime(t)
+	currentRuntime().Redaction.Local.Level = events.LevelStandard
 	raw, err := os.ReadFile(filepath.Join("..", "events", "testdata", "coraza-3.8.0-audit.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	audit := filepath.Join(t.TempDir(), "coraza-audit.log")
+	// Match the fixture clock to the retained event clock used above.
+	var records []string
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatal(err)
+		}
+		rec["transaction"].(map[string]any)["unix_timestamp"] = time.Now().UnixNano()
+		b, _ := json.Marshal(rec)
+		records = append(records, string(b))
+	}
+	raw = []byte(strings.Join(records, "\n") + "\n")
 	if err := os.WriteFile(audit, raw, 0o640); err != nil {
 		t.Fatal(err)
 	}
@@ -425,5 +438,26 @@ func TestEventDetailShowsLocalMatchContextOnDemand(t *testing.T) {
 	t.Setenv("CADDY_UI_AUDIT_LOG", filepath.Join(t.TempDir(), "rotated-away.log"))
 	if page := getPage(t, "/?tab=event&tx="+git.TxID+"&raw=1"); !strings.Contains(page, "raw audit record not available locally") {
 		t.Fatal("a missing raw record must be explained")
+	}
+}
+
+func TestCurrentLocalPolicyProtectsPreviouslyFullEventsInHTMLAndAPI(t *testing.T) {
+	setupUIEnv(t)
+	setupWAFRuntime(t)
+	e := &events.Event{Kind: "event", V: 1, TxID: "previous-full", Node: "origin", TS: time.Now().UTC(), Site: "example.com", Path: "/search", Redaction: "full", Query: "token=QUERY_SECRET&q=ordinary", Headers: map[string]string{"authorization": "Bearer HEADER_SECRET"}, Hits: []events.Hit{{ID: 942100, Var: "ARGS:q", Data: "ordinary", Value: "BODY_SECRET"}}}
+	if _, err := currentRuntime().Store.Append(e, events.SourceLocal); err != nil {
+		t.Fatal(err)
+	}
+	body := getPage(t, "/?tab=event&tx=previous-full&node=origin")
+	if strings.Contains(body, "SECRET") {
+		t.Fatal("HTML bypassed current strict setting")
+	}
+	rec := apiCall(t, NewRouter(), http.MethodGet, "/api/events/previous-full?node=origin", "")
+	if strings.Contains(rec.Body.String(), "SECRET") || !strings.Contains(rec.Body.String(), `"redaction":"strict"`) {
+		t.Fatal("API bypassed current strict setting", rec.Body.String())
+	}
+	old, _ := currentRuntime().Store.GetFor(e.TxID, e.Node)
+	if old.Headers["authorization"] != "Bearer HEADER_SECRET" {
+		t.Fatal("display changed durable history")
 	}
 }

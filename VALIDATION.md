@@ -1,3 +1,17 @@
+# Configurable privacy validation — 2026-10-06
+
+Opus's committed baseline passed its race suite. Review found that the new level engine was not connected to runtime/persistence/export, and on-demand raw viewing exposed query credentials and unclassified fragments. Those paths now share the configured policy; a separate cloud queue prevents richer local data from being an Alloy input. Opus's dictionary lookup fix, unmatched-audit filtering, deployment ownership and Chinese guides were preserved.
+
+Current validation:
+
+- New regression tests cover all three levels, independent export, disk-full retry, imported-event exclusion, configuration rejection, name overrides, structured/escaped JSON and composite-fragment leakage, old full-event view filtering and bounded formatted/concatenated raw lookup.
+- Complete race suite passed, including native Coraza mode/expiry/rotation/streaming tests. Vet/lint, format, Compose/YAML, shell and actual Alloy configuration checks passed.
+- Actual existing Caddy image plus Alloy and a Loki protocol fixture proved: local full retained synthetic query/Auth/Cookie markers; cloud strict contained none; rule IDs and scores matched; cloud history remained viewable locally. Header testing explicitly used audit part B; full cannot invent uncollected headers. A second actual-runtime check verified standard credential masking, hide/keep overrides, cloud-full clamping to local-standard, and current strict views of older full records.
+- Privacy changes preserve raw-source cursor retry when export fails. First-upgrade migration and export use durable node/transaction deduplication; imported history is never re-sent.
+- Local UI/API responses use no-store. On-demand viewing does not bypass local strict and does not create an export.
+
+The actual Grafana Cloud tenant was not exercised because no account credentials were present. Production services were not changed. The isolated project's resources were removed after validation. Previous runs are recorded below.
+
 # Local/cloud implementation validation
 
 ## 2026-10-06 follow-up

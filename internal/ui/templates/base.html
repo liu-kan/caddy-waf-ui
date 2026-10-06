@@ -86,7 +86,9 @@
     <span class="u-text-amber">Audit log ingestion is not running.</span>
   {{ end }}
   {{ if .StoreReady }}<span>{{ .StoreStats.Stored }} retained event(s), {{ .StoreStats.Count }} cached in memory{{ if not .StoreStats.Oldest.IsZero }} since {{ date .StoreStats.Oldest "2006-01-02 15:04" }}{{ end }}.</span>{{ end }}
-  <span>Rule dictionary: CRS {{ .DictVersion }}.</span>
+  <span>Privacy: local {{ .LocalLevel }}, cloud {{ .CloudLevel }}. Export queue retains {{ .CloudStats.Stored }} event(s).</span>
+ {{ if .PipelineError }}<span class="u-text-danger">Pipeline startup error: {{ .PipelineError }}</span>{{ end }}
+ <span>Rule dictionary: CRS {{ .DictVersion }}.</span>
   {{ if .CRSMismatch }}<span class="u-text-amber">Events report CRS {{ range .CRSSeen }}{{ . }} {{ end }}— rule explanations may be outdated; regenerate the dictionary or set CADDY_UI_CRS_RULES_DIR.</span>{{ end }}
   <span>{{ if .LokiReady }}Loki history: configured.{{ else }}Loki history: not configured.{{ end }}</span>
 </div>

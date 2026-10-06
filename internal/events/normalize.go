@@ -71,6 +71,8 @@ type Normalizer struct {
 	Node string
 	// AllowMatchedValues is opt-in. Credentials and unrecognized logdata are always hidden.
 	AllowMatchedValues bool
+	// Redaction is applied before truncation and persistence. Nil uses the legacy switch.
+	Redaction *Redaction
 
 	// SiteForHost maps a Host to a managed site when a record carries no
 	// UI signature (overlays generated before signatures existed).
@@ -93,8 +95,6 @@ var (
 	totalScore    = regexp.MustCompile(`Total Score: (\d+)`)
 	crsVersionTag = regexp.MustCompile(`OWASP_CRS/(\d+\.\d+\.\d+)`)
 	plTagPattern  = regexp.MustCompile(`^paranoia-level/([1-4])$`)
-	// Sensitive targets whose matched content is never stored.
-	sensitiveVar = regexp.MustCompile(`(?i)^(?:REQUEST_COOKIES(?:_NAMES)?(?::.*)?|REQUEST_HEADERS:(?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|api-key|x-auth-token|x-access-token|x-csrf-token|x-xsrf-token)|(?:ARGS|ARGS_GET|ARGS_POST|ARGS_NAMES):.*(?:pass|pwd|secret|token|apikey|api_key|auth|session|sess|csrf|xsrf|otp|totp|credential|private|signature|jwt|bearer).*)$`)
 )
 
 // Normalize parses one JSON audit record.
@@ -116,6 +116,10 @@ func (n *Normalizer) normalize(rec *auditRecord) (*Event, error) {
 	if tx.Request != nil {
 		e.Method = tx.Request.Method
 		e.Path, e.QueryKeys = splitURI(tx.Request.URI)
+		if u, err := url.ParseRequestURI(tx.Request.URI); err == nil {
+			e.Query = u.RawQuery
+		}
+		e.Headers = requestHeaders(tx.Request.Headers)
 	}
 	e.Host = tx.ServerID
 	if e.Host == "" && tx.Request != nil {
@@ -210,6 +214,8 @@ func (n *Normalizer) normalize(rec *auditRecord) (*Event, error) {
 	if e.Hits == nil {
 		e.Hits = []Hit{}
 	}
+	policy := n.redactionPolicy()
+	policy.apply(e)
 	return e, nil
 }
 
@@ -222,13 +228,7 @@ func (n *Normalizer) hit(id int, msg, logdata string, severity json.RawMessage, 
 			h.PL, _ = strconv.Atoi(m[1])
 		}
 	}
-	h.Var, h.Data, h.Value = splitLogdata(logdata)
-	if h.Var == "" || sensitiveVar.MatchString(h.Var) || !n.AllowMatchedValues {
-		h.Data, h.Value = redacted, redacted
-	}
-	if !n.AllowMatchedValues {
-		h.Value = redacted
-	}
+	h.Var, h.Data, h.Value = splitLogdataRaw(logdata)
 	rule, ok := n.Dict.Lookup(id)
 	if !ok && raw != "" {
 		if parsed, err := crs.Parse(strings.NewReader(raw), "audit"); err == nil && len(parsed) > 0 && parsed[0].ID == id {
@@ -255,6 +255,16 @@ func (n *Normalizer) hit(id int, msg, logdata string, severity json.RawMessage, 
 		h.Msg = "Custom rule match (message hidden)"
 	}
 	return h
+}
+
+func (n *Normalizer) redactionPolicy() Redaction {
+	if n.Redaction != nil {
+		return *n.Redaction
+	}
+	if n.AllowMatchedValues {
+		return Redaction{Level: LevelStandard}
+	}
+	return Redaction{Level: LevelStrict}
 }
 
 // computeScores sums the anomaly score that the recorded policy would have
@@ -384,15 +394,19 @@ func splitURI(uri string) (string, []string) {
 // splitLogdata extracts the variable, matched fragment and value from the
 // CRS logdata format "Matched Data: X found within VAR: VALUE".
 func splitLogdata(logdata string) (variable, data, value string) {
+	variable, data, value = splitLogdataRaw(logdata)
+	return variable, truncate(data, maxDataLen), truncate(value, maxValueLen)
+}
+func splitLogdataRaw(logdata string) (variable, data, value string) {
 	if !matchedData.MatchString(logdata) {
-		return "", truncate(logdata, maxDataLen), ""
+		return "", logdata, ""
 	}
 	rest := strings.TrimPrefix(logdata, "Matched Data: ")
 	loc := foundWithin.FindStringSubmatchIndex(rest)
 	if loc == nil {
-		return "", truncate(rest, maxDataLen), ""
+		return "", rest, ""
 	}
-	return rest[loc[2]:loc[3]], truncate(rest[:loc[0]], maxDataLen), truncate(rest[loc[1]:], maxValueLen)
+	return rest[loc[2]:loc[3]], rest[:loc[0]], rest[loc[1]:]
 }
 
 func severityName(raw json.RawMessage) string {

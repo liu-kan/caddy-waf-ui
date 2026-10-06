@@ -1,7 +1,7 @@
-// Only normalized local events are shipped. imported-*.jsonl, raw audit
+// Only independently redacted export events are shipped. Local/imported events, raw audit
 // records, drafts and full configuration diffs never enter this pipeline.
 loki.source.file "waf" {
-  targets = [{__path__ = "/ui-data/events/events-*.jsonl", job = "caddy-waf-ui", kind = "event"}]
+  targets = [{__path__ = "/ui-data/cloud/events/events-*.jsonl", job = "caddy-waf-ui", kind = "event"}]
   file_match { enabled = true }
   forward_to = [loki.process.waf.receiver]
 }

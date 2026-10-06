@@ -18,10 +18,36 @@ import (
 // Handlers degrade to honest empty states when it is not set (tests, or the
 // event pipeline failed to start).
 type Runtime struct {
-	Store    *events.Store
-	Ingester *events.Ingester
-	Dict     *crs.Dictionary
-	Loki     *events.LokiClient
+	Store         *events.Store
+	Ingester      *events.Ingester
+	Dict          *crs.Dictionary
+	Loki          *events.LokiClient
+	CloudStore    *events.Store
+	Redaction     events.RedactionSettings
+	PipelineError string
+}
+
+func displayEvent(e *events.Event) *events.Event {
+	if e == nil {
+		return nil
+	}
+	return localRedaction().Apply(e)
+}
+func displayEvents(list []*events.Event) []*events.Event {
+	out := make([]*events.Event, 0, len(list))
+	for _, e := range list {
+		out = append(out, displayEvent(e))
+	}
+	return out
+}
+func localRedaction() events.Redaction {
+	if rt := currentRuntime(); rt != nil {
+		return rt.Redaction.Local
+	}
+	if cfg, err := events.ReadRedactionSettings(); err == nil {
+		return cfg.Local
+	}
+	return events.Redaction{Level: events.LevelStrict}
 }
 
 var runtimeRef atomic.Pointer[Runtime]

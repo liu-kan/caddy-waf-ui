@@ -13,6 +13,7 @@ UI 的页面地址都是 `/?tab=<页面>`。登录与 API 共用一个令牌（`
 - [配置参考](configuration.md)：全部环境变量、默认值和作用。
 - [后端镜像](backend-image.md)：对镜像的要求、哪些改动走挂载、需要固化进镜像时怎么做、CRS 版本与规则字典。
 - [Grafana Cloud 与 Alloy](grafana-cloud.md)：上传哪些数据、令牌分权、免费层预算、本地查询云端历史。
+- [可配置脱敏](redaction.md)：本地和云端三级策略、hide/keep 名单、历史数据边界。
 - [安全与隐私](security.md)：信任边界、令牌、脱敏规则、本地原始日志。
 - [升级说明](upgrade-notes.md)：相对上游和早期版本的行为变化。
 

@@ -70,6 +70,7 @@ func HandleAPIEvents(w http.ResponseWriter, r *http.Request) {
 			writeJSONValue(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 			return
 		}
+		page.Events = displayEvents(page.Events)
 		writeJSONValue(w, http.StatusOK, page)
 		return
 	}
@@ -81,7 +82,7 @@ func HandleAPIEvents(w http.ResponseWriter, r *http.Request) {
 	if list == nil {
 		list = []*events.Event{}
 	}
-	writeJSONValue(w, http.StatusOK, map[string]any{"total": total, "events": list})
+	writeJSONValue(w, http.StatusOK, map[string]any{"total": total, "events": displayEvents(list)})
 }
 
 // HandleAPIEvent returns one event.
@@ -105,7 +106,7 @@ func HandleAPIEvent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Event not found", http.StatusNotFound)
 		return
 	}
-	writeJSONValue(w, http.StatusOK, e)
+	writeJSONValue(w, http.StatusOK, displayEvent(e))
 }
 
 type apiHit struct {
@@ -174,6 +175,7 @@ func HandleAPIExplain(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Event not found", http.StatusNotFound)
 		return
 	}
+	e = displayEvent(e)
 	dict := dictionary()
 	var hits []apiHit
 	for _, v := range buildHitViews(e, dict) {

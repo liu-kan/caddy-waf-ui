@@ -15,6 +15,7 @@ import (
 	"github.com/developmi/caddy-waf-ui/internal/caddy"
 	"github.com/developmi/caddy-waf-ui/internal/config"
 	"github.com/developmi/caddy-waf-ui/internal/domain"
+	"github.com/developmi/caddy-waf-ui/internal/events"
 	"github.com/developmi/caddy-waf-ui/internal/files"
 	"github.com/developmi/caddy-waf-ui/internal/iprules"
 	"github.com/developmi/caddy-waf-ui/internal/logs"
@@ -288,6 +289,19 @@ func buildPageData(r *http.Request, tab string, sites []*domain.Site) pageData {
 	if tab == "logs" {
 		if result, ok := loadLogs(q); ok {
 			data.Logs = result.Entries
+			policy := localRedaction()
+			for i := range data.Logs {
+				entry := &data.Logs[i]
+				entry.URI = policy.URI(entry.URI)
+				if policy.Level < events.LevelFull {
+					id, _ := strconv.Atoi(entry.RuleID)
+					if rule, ok := dictionary().Lookup(id); ok {
+						entry.Message = rule.Msg
+					} else {
+						entry.Message = "Custom rule match (message hidden)"
+					}
+				}
+			}
 			data.LogPage = result.Page
 			data.LogPages = result.Pages
 			data.LogPrevURL = logPageURL(q, result.Page-1)

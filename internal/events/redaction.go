@@ -1,6 +1,7 @@
 package events
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -113,11 +114,12 @@ func words(name string) []string {
 		}
 	}
 	var prev rune
-	for i, r := range name {
+	runes := []rune(name)
+	for i, r := range runes {
 		switch {
 		case !unicode.IsLetter(r) && !unicode.IsDigit(r):
 			flush()
-		case i > 0 && (unicode.IsUpper(r) && unicode.IsLower(prev) || unicode.IsDigit(r) != unicode.IsDigit(prev) && len(cur) > 0):
+		case i > 0 && (unicode.IsUpper(r) && unicode.IsLower(prev) || unicode.IsUpper(r) && unicode.IsUpper(prev) && i+1 < len(runes) && unicode.IsLower(runes[i+1]) || unicode.IsDigit(r) != unicode.IsDigit(prev) && len(cur) > 0):
 			flush()
 			cur = append(cur, r)
 		default:
@@ -220,6 +222,28 @@ func (r Redaction) pairs(s string) string {
 	if s == "" || s == redacted {
 		return s
 	}
+	// Parse complete JSON before regex fallback: escaped names, arrays and
+	// sensitive object-valued members cannot be safely handled by a regex.
+	if json.Valid([]byte(s)) && (strings.HasPrefix(strings.TrimSpace(s), "{") || strings.HasPrefix(strings.TrimSpace(s), "[")) {
+		var value any
+		dec := json.NewDecoder(strings.NewReader(s))
+		dec.UseNumber()
+		if dec.Decode(&value) == nil {
+			// 2026-10-06 08:50: an unchanged document is returned verbatim, and a
+			// changed one is encoded without HTML escaping, so XSS payloads such
+			// as <script> stay readable instead of becoming \u003cscript\u003e.
+			if !r.jsonValue(value, "", 0) {
+				return s
+			}
+			var out strings.Builder
+			enc := json.NewEncoder(&out)
+			enc.SetEscapeHTML(false)
+			if enc.Encode(value) == nil {
+				return strings.TrimSuffix(out.String(), "\n")
+			}
+			return redacted
+		}
+	}
 	s = jsonPair.ReplaceAllStringFunc(s, func(m string) string {
 		sub := jsonPair.FindStringSubmatch(m)
 		if r.sensitive(sub[1]) {
@@ -238,6 +262,103 @@ func (r Redaction) pairs(s string) string {
 		}
 		return m
 	})
+}
+
+func (r Redaction) jsonValue(value any, prefix string, depth int) bool {
+	changed := false
+	switch v := value.(type) {
+	case map[string]any:
+		for key, item := range v {
+			name := key
+			if prefix != "" {
+				name = prefix + "." + key
+			}
+			if r.sensitive(name) || depth >= 32 {
+				v[key] = redacted
+				changed = true
+				continue
+			}
+			if r.jsonValue(item, name, depth+1) {
+				changed = true
+			}
+		}
+	case []any:
+		for i, item := range v {
+			if depth >= 32 {
+				v[i] = redacted
+				changed = true
+				continue
+			}
+			if r.jsonValue(item, prefix, depth+1) {
+				changed = true
+			}
+		}
+	}
+	return changed
+}
+
+func (r Redaction) uri(s string) string {
+	if s == "" || s == redacted {
+		return s
+	}
+	u, err := url.Parse(s)
+	if err != nil {
+		return r.rawURI(s)
+	}
+	if u.Opaque != "" && r.Level < LevelFull {
+		return redacted
+	}
+	u.RawQuery = r.query(u.RawQuery)
+	if u.User != nil {
+		name := u.User.Username()
+		password, hasPassword := u.User.Password()
+		if r.sensitive("username") {
+			name = redacted
+		}
+		if r.sensitive("password") {
+			password = redacted
+		}
+		if hasPassword {
+			u.User = url.UserPassword(name, password)
+		} else {
+			u.User = url.User(name)
+		}
+	}
+	if strings.Contains(u.Fragment, "=") {
+		u.Fragment = r.query(u.Fragment)
+		u.RawFragment = ""
+	}
+	return u.String()
+}
+
+// rawURI handles URIs that url.Parse rejects. 2026-10-06 08:50: invalid
+// escapes (%zz, %u0027) and control bytes are typical of attack payloads,
+// so hiding the whole URI at standard removed the evidence needed to judge
+// a match. Query and fragment pairs still follow the policy, and userinfo
+// is hidden whenever the URL form would hide its password.
+func (r Redaction) rawURI(s string) string {
+	rest, fragment, hasFragment := strings.Cut(s, "#")
+	path, query, hasQuery := strings.Cut(rest, "?")
+	if scheme, after, ok := strings.Cut(path, "://"); ok && scheme != "" {
+		authority, tail, hasTail := strings.Cut(after, "/")
+		if at := strings.LastIndexByte(authority, '@'); at >= 0 && r.sensitive("password") {
+			path = scheme + "://" + redacted + authority[at:]
+			if hasTail {
+				path += "/" + tail
+			}
+		}
+	}
+	out := path
+	if hasQuery {
+		out += "?" + r.query(query)
+	}
+	if hasFragment {
+		if strings.Contains(fragment, "=") {
+			fragment = r.query(fragment)
+		}
+		out += "#" + fragment
+	}
+	return out
 }
 
 // hit applies the policy to the matched data and value of one hit.
@@ -264,21 +385,72 @@ func (r Redaction) hit(h *Hit) {
 		}
 		h.Data, h.Value = r.pairs(h.Data), r.pairs(h.Value)
 	case namesCollections[collection]:
+	case collection == "REQUEST_FILENAME" || collection == "REQUEST_BASENAME" || collection == "REQUEST_METHOD" || collection == "REQUEST_PROTOCOL" || collection == "SERVER_NAME" || collection == "REMOTE_ADDR":
 	case collection == "REQUEST_COOKIES":
 		if r.sensitiveCookie(key) {
 			hide()
 		}
 	case keyedCollections[collection]:
+		if key == "" && r.Level < LevelFull {
+			hide()
+			return
+		}
 		if r.sensitive(key) {
 			hide()
 			return
 		}
-		if collection == "REQUEST_HEADERS" && strings.EqualFold(key, "referer") {
-			h.Data, h.Value = r.pairs(h.Data), r.pairs(h.Value)
+		if collection == "REQUEST_HEADERS" && (strings.EqualFold(key, "referer") || strings.EqualFold(key, "origin")) {
+			before := h.Value
+			h.Value = r.uri(h.Value)
+			if before != h.Value {
+				h.Data = redacted
+			}
 		}
 	case compositeCollections[collection]:
-		h.Data, h.Value = r.pairs(h.Data), r.pairs(h.Value)
+		before := h.Value
+		switch collection {
+		case "REQUEST_URI", "REQUEST_URI_RAW":
+			h.Value = r.uri(h.Value)
+		case "QUERY_STRING":
+			h.Value = r.query(h.Value)
+		case "REQUEST_LINE":
+			fields := strings.SplitN(h.Value, " ", 3)
+			if len(fields) == 3 {
+				fields[1] = r.uri(fields[1])
+				h.Value = strings.Join(fields, " ")
+			} else if r.Level < LevelFull {
+				h.Value = redacted
+			}
+		case "XML":
+			if r.Level < LevelFull || len(r.Hide) > 0 {
+				h.Value = redacted
+			}
+		default:
+			if r.Level < LevelFull && !json.Valid([]byte(h.Value)) && !strings.Contains(h.Value, "=") {
+				h.Value = redacted
+			} else {
+				h.Value = r.pairs(h.Value)
+			}
+		}
+		if h.Value != before {
+			h.Data = redacted
+		} else {
+			h.Data = r.pairs(h.Data)
+		}
+	default:
+		if r.Level < LevelFull {
+			hide()
+		}
 	}
+}
+
+// URI applies the same policy to the legacy local audit viewer.
+func (r Redaction) URI(s string) string {
+	if r.Level == LevelStrict {
+		path, _ := splitURI(s)
+		return path
+	}
+	return truncate(r.uri(s), maxPathLen+maxQueryLen)
 }
 
 // query applies the policy to a raw query string.
@@ -313,10 +485,10 @@ func (r Redaction) headers(in map[string]string) map[string]string {
 		case r.sensitive(name):
 			out[name] = redacted
 		case r.Level >= LevelFull || diagnosticHeaders[name] || r.keeps(name):
-			if name == "referer" {
-				value = r.pairs(value)
+			if name == "referer" || name == "origin" {
+				value = r.uri(value)
 			}
-			out[name] = value
+			out[name] = truncate(value, maxHeaderValue)
 		}
 	}
 	if len(out) == 0 {
@@ -345,6 +517,9 @@ func (r Redaction) Apply(e *Event) *Event {
 
 // apply redacts e in place.
 func (r Redaction) apply(e *Event) {
+	if r.Level < LevelStrict || r.Level > LevelFull {
+		r.Level = LevelStrict
+	}
 	if e.Redaction != "" {
 		if stored, err := ParseLevel(e.Redaction); err == nil {
 			r.Level = Stricter(r.Level, stored)
@@ -354,6 +529,9 @@ func (r Redaction) apply(e *Event) {
 	}
 	for i := range e.Hits {
 		r.hit(&e.Hits[i])
+		e.Hits[i].Var = truncate(e.Hits[i].Var, 256)
+		e.Hits[i].Data = truncate(e.Hits[i].Data, maxDataLen)
+		e.Hits[i].Value = truncate(e.Hits[i].Value, maxValueLen)
 	}
 	e.Query = r.query(e.Query)
 	e.Headers = r.headers(e.Headers)
@@ -381,7 +559,7 @@ func requestHeaders(in map[string][]string) map[string]string {
 	}
 	out := make(map[string]string, len(names))
 	for _, name := range names {
-		out[strings.ToLower(name)] = truncate(strings.Join(in[name], ", "), maxHeaderValue)
+		out[strings.ToLower(name)] = strings.Join(in[name], ", ")
 	}
 	return out
 }

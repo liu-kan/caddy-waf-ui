@@ -18,7 +18,7 @@ func (in *Ingester) PollArchives() error {
 	for _, name := range names {
 		h := sha256.Sum256([]byte(name))
 		state := in.StatePath + ".archive-" + hex.EncodeToString(h[:8])
-		archived := &Ingester{Path: name, StatePath: state, Store: in.Store, Norm: in.Norm, ChunkSize: in.ChunkSize}
+		archived := &Ingester{Path: name, StatePath: state, Store: in.Store, Norm: in.Norm, ChunkSize: in.ChunkSize, CloudStore: in.CloudStore, CloudRedaction: in.CloudRedaction}
 		if err := archived.Poll(); err != nil {
 			return err
 		}

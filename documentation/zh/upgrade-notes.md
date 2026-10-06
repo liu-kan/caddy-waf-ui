@@ -58,3 +58,9 @@
 5. `docker compose up -d --build`。
 6. 在 UI 中对每个站点重新应用一次当前模式，生成新格式的 overlay；在 **Rollback & History** 中确认 load、readback（以及配置了探测地址时的 request）阶段成功。
 7. 用一个必然命中的请求（例如 `/.env`）确认 **Events** 中出现事件，且 CRS 版本与 **Rules** 页标题一致。
+
+## 本地与云端独立脱敏（2026-10-06）
+
+用新变量 REDACTION_LOCAL / REDACTION_CLOUD 替换旧 MATCHED_VALUES。推荐本地 standard、云端 strict。升级 Alloy 配置，使其只读 `/ui-data/cloud/events/events-*.jsonl`；旧版本直接读 `/ui-data/events`，不得继续用于本地丰富事件。新 UI 首次启动会把已有本地记录按云端策略迁移到新队列，导回记录跳过；中断可重试。此后新记录双写成功才推进读取位置。迁移失败会停用读取并显示错误，纠正磁盘/权限后重启。
+
+新队列额外默认保留 14 天、上限 128 MiB。已经排队或上传的数据不会因修改策略自动清除。详见 [可配置脱敏](redaction.md)。

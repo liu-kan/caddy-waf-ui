@@ -51,6 +51,9 @@ func SecurityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("Content-Security-Policy", securityPolicy)
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
+		if !strings.HasPrefix(r.URL.Path, "/static/") {
+			w.Header().Set("Cache-Control", "no-store")
+		}
 		// Strict-Transport-Security (SH-2): the UI does not terminate TLS, so
 		// the header only applies when the request arrived over HTTPS through
 		// a trusted TLS proxy. Caddy adds X-Forwarded-Proto: https in

@@ -10,7 +10,7 @@ Alloy 只读取 UI 数据卷和日志目录（均只读挂载），配置见 `al
 
 | 类型（`kind`） | 来源 | 上传的字段 | 不上传 |
 | --- | --- | --- | --- |
-| `event` | `/ui-data/events/events-*.jsonl` | 规范化 WAF 事件：站点、节点、客户端 IP、方法、路径、查询参数名、规则编号与命中变量名、分值、模式、策略、revision | 请求头、请求体、查询参数值；匹配内容默认为 `[redacted]` |
+| `event` | `/ui-data/cloud/events/events-*.jsonl` | 独立云端策略处理的 WAF 事件；strict 默认只保留规则、变量名、路径、分数等 | 原始文件及云端策略去掉的内容；显式 full 可发送已采集的凭据 |
 | `change` | `/ui-data/changes/changes.jsonl` | 站点、动作、结果、revision、SHA256、各阶段名称与结果 | 操作人、原因、错误信息、diff、草稿、误报判定 |
 | `access` | Caddy `access*.json`（示例 Caddyfile 中配置） | 站点、客户端 IP、对端 IP、方法、路径、状态码、耗时、大小 | 请求头、查询串、User-Agent |
 | `runtime` | Caddy `error*.json` | 时间、级别、logger | 消息正文 |
@@ -87,3 +87,5 @@ Grafana Cloud 免费层的日志额度为每月 50 GB、保留 14 天，指标�
 curl -s -H "Authorization: Bearer $CADDY_UI_TOKEN" \
   "http://127.0.0.1:8080/api/events?source=loki&range=7d&rule=930130&limit=50"
 ```
+
+本地丰富事件不会直接发送；云端队列按独立策略处理。三级含义及历史数据边界见 [可配置脱敏](redaction.md)。

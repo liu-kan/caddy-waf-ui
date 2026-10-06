@@ -13,6 +13,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -234,3 +235,22 @@ func AuditRotateMB() int {
 	}
 	return positiveIntEnv("CADDY_UI_AUDIT_ROTATE_MB", 32)
 }
+
+// RedactionLocal prefers explicit levels, with the legacy matched-values
+// switch mapped to standard. Standalone default remains strict.
+func RedactionLocal() string {
+	if v, ok := os.LookupEnv("CADDY_UI_REDACTION_LOCAL"); ok {
+		return v
+	}
+	if MatchedValues() {
+		return "standard"
+	}
+	return "strict"
+}
+func RedactionCloud() string  { return envOr("CADDY_UI_REDACTION_CLOUD", "strict") }
+func RedactionHide() []string { return redactionNames("CADDY_UI_REDACTION_HIDE") }
+func RedactionKeep() []string { return redactionNames("CADDY_UI_REDACTION_KEEP") }
+func redactionNames(key string) []string {
+	return strings.FieldsFunc(os.Getenv(key), func(r rune) bool { return r == ',' || r == ' ' || r == '\n' || r == '\t' })
+}
+func CloudDiskMaxBytes() int64 { return int64(positiveIntEnv("CADDY_UI_CLOUD_DISK_MAX_MB", 128)) << 20 }

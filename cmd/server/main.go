@@ -19,6 +19,7 @@ import (
 	"github.com/developmi/caddy-waf-ui/internal/crs"
 	"github.com/developmi/caddy-waf-ui/internal/domain"
 	"github.com/developmi/caddy-waf-ui/internal/events"
+	"github.com/developmi/caddy-waf-ui/internal/files"
 	"github.com/developmi/caddy-waf-ui/internal/logs"
 	"github.com/developmi/caddy-waf-ui/internal/metrics"
 	"github.com/developmi/caddy-waf-ui/internal/ratelimit"
@@ -69,7 +70,12 @@ func run(serve func(*http.Server) error) error {
 	// 1. Initialize the foundations: structured JSON logger to stdout (NIST AU-12)
 	logs.Setup()
 
-	// 2. Event pipeline: never fatal, the configuration pages keep working.
+	// Invalid privacy configuration is fatal rather than silently exporting more detail.
+	if _, err := events.ReadRedactionSettings(); err != nil {
+		return err
+	}
+
+	// 2. Event pipeline: storage failures keep configuration pages working.
 	stop := startPipeline()
 	defer stop()
 
@@ -85,6 +91,11 @@ func run(serve func(*http.Server) error) error {
 // the maintenance loops, and installs them for the UI. It returns the
 // shutdown function.
 func startPipeline() func() {
+	settings, err := events.ReadRedactionSettings()
+	if err != nil {
+		slog.Error("invalid redaction configuration", "error", err)
+		return func() {}
+	}
 	dict := crs.Default()
 	if dir := config.CRSRulesDir(); dir != "" {
 		if mounted, err := crs.LoadDir(dir); err != nil {
@@ -105,7 +116,7 @@ func startPipeline() func() {
 		}
 		dict = dict.Merge(mounted)
 	}
-	rt := &ui.Runtime{Dict: dict, Loki: &events.LokiClient{URL: config.LokiURL(), User: config.LokiUser(),
+	rt := &ui.Runtime{Dict: dict, Redaction: settings, Loki: &events.LokiClient{URL: config.LokiURL(), User: config.LokiUser(),
 		Token: config.LokiToken(), Selector: config.LokiSelector()}}
 	defer ui.SetRuntime(rt)
 
@@ -113,24 +124,49 @@ func startPipeline() func() {
 	store, err := events.OpenStore(filepath.Join(config.DataDir(), "events"), retention, config.EventsMemoryMax())
 	if err != nil {
 		slog.Error("WAF event store disabled: check CADDY_UI_DATA_DIR (a writable volume)", "dir", config.DataDir(), "error", err)
-		return func() {}
+		return disabledPipeline(rt, err)
 	}
 	store.MaxDiskBytes = config.EventsDiskMaxBytes()
 	store.OnAdd = countEvent
-	ingester := &events.Ingester{
-		Path:      config.AuditLogPath(),
-		StatePath: filepath.Join(config.DataDir(), "state", "ingest.json"),
-		Store:     store,
-		Norm:      &events.Normalizer{Dict: dict, Node: config.NodeName(), AllowMatchedValues: config.MatchedValues(), SiteForHost: newSiteResolver().resolve},
+	cloud, err := events.OpenStore(filepath.Join(config.DataDir(), "cloud", "events"), retention, 1)
+	rt.Store = store
+	if err != nil {
+		slog.Error("WAF export queue unavailable", "error", err)
+		return disabledPipeline(rt, err)
 	}
-	rt.Store, rt.Ingester = store, ingester
+	cloud.MaxDiskBytes = config.CloudDiskMaxBytes()
+	rt.CloudStore = cloud
+	if err := cloud.Prune(time.Now().UTC()); err != nil {
+		slog.Error("could not prune export queue", "error", err)
+		return disabledPipeline(rt, err)
+	}
+	marker := filepath.Join(config.DataDir(), "cloud", "bootstrap.done")
+	if _, err := os.Stat(marker); errors.Is(err, os.ErrNotExist) {
+		if err := store.ExportRetained(cloud, settings.Cloud); err != nil {
+			slog.Error("pending event migration failed; ingestion disabled until corrected and restarted", "error", err)
+			return disabledPipeline(rt, err)
+		}
+		if err := files.AtomicWrite(marker, []byte(time.Now().UTC().Format(time.RFC3339Nano))); err != nil {
+			slog.Error("could not save export migration state", "error", err)
+			return disabledPipeline(rt, err)
+		}
+	} else if err != nil {
+		slog.Error("could not read export migration state", "error", err)
+		return disabledPipeline(rt, err)
+	}
+	ingester := &events.Ingester{
+		Path: config.AuditLogPath(), StatePath: filepath.Join(config.DataDir(), "state", "ingest.json"),
+		Store: store, CloudStore: cloud, CloudRedaction: settings.Cloud,
+		Norm: &events.Normalizer{Dict: dict, Node: config.NodeName(), Redaction: &settings.Local, SiteForHost: newSiteResolver().resolve},
+	}
+	rt.Ingester = ingester
 	registerGauges(rt)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() { defer wg.Done(); ingester.Run(ctx, config.IngestInterval()) }()
-	go func() { defer wg.Done(); maintain(ctx, store) }()
+	go func() { defer wg.Done(); maintain(ctx, store, cloud) }()
 	if interval := config.LokiSyncInterval(); interval > 0 && rt.Loki.Configured() {
 		wg.Add(1)
 		go func() { defer wg.Done(); syncLoki(ctx, rt, interval) }()
@@ -138,10 +174,17 @@ func startPipeline() func() {
 	return func() {
 		cancel()
 		wg.Wait()
-		if err := store.Rollups().Flush(); err != nil {
-			slog.Warn("could not flush event rollups", "error", err)
+		for _, s := range []*events.Store{store, cloud} {
+			if err := s.Rollups().Flush(); err != nil {
+				slog.Warn("could not flush event rollups", "error", err)
+			}
 		}
 	}
+}
+
+func disabledPipeline(rt *ui.Runtime, err error) func() {
+	rt.PipelineError = err.Error()
+	return func() {}
 }
 
 // countEvent feeds the WAF metrics from newly ingested events.
@@ -159,13 +202,15 @@ func countEvent(e *events.Event) {
 
 // maintain flushes rollups every 30 seconds and prunes expired events
 // hourly.
-func maintain(ctx context.Context, store *events.Store) {
+func maintain(ctx context.Context, stores ...*events.Store) {
 	flush := time.NewTicker(30 * time.Second)
 	prune := time.NewTicker(time.Hour)
 	defer flush.Stop()
 	defer prune.Stop()
-	if err := store.Prune(time.Now().UTC()); err != nil {
-		slog.Warn("could not prune expired events", "error", err)
+	for _, store := range stores {
+		if err := store.Prune(time.Now().UTC()); err != nil {
+			slog.Warn("could not prune expired events", "error", err)
+		}
 	}
 	for {
 		select {
@@ -175,12 +220,16 @@ func maintain(ctx context.Context, store *events.Store) {
 			if err := service.RotateAudit(int64(config.AuditRotateMB()) << 20); err != nil {
 				slog.Warn("audit rotation failed", "error", err)
 			}
-			if err := store.Rollups().Flush(); err != nil {
-				slog.Warn("could not flush event rollups", "error", err)
+			for _, store := range stores {
+				if err := store.Rollups().Flush(); err != nil {
+					slog.Warn("could not flush event rollups", "error", err)
+				}
 			}
 		case <-prune.C:
-			if err := store.Prune(time.Now().UTC()); err != nil {
-				slog.Warn("could not prune expired events", "error", err)
+			for _, store := range stores {
+				if err := store.Prune(time.Now().UTC()); err != nil {
+					slog.Warn("could not prune expired events", "error", err)
+				}
 			}
 		}
 	}

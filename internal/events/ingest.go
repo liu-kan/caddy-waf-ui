@@ -47,10 +47,12 @@ type IngestStatus struct {
 // newline-less concatenated objects of older writers), normalizes new
 // records into the store and remembers its position across restarts.
 type Ingester struct {
-	Path      string
-	StatePath string
-	Store     *Store
-	Norm      *Normalizer
+	Path           string
+	StatePath      string
+	Store          *Store
+	Norm           *Normalizer
+	CloudStore     *Store
+	CloudRedaction Redaction
 	// ChunkSize bounds the bytes read per poll.
 	ChunkSize int64
 
@@ -299,6 +301,19 @@ func (in *Ingester) ingest(raw []byte) error {
 	if added {
 		in.status.Ingested++
 		in.status.LastEvent = e.TS
+	}
+	if in.CloudStore != nil {
+		// Export retries even when the local append already succeeded.
+		// Never recover detail from raw input that the retained event removed.
+		if !added {
+			if stored, ok := in.Store.GetFor(e.TxID, e.Node); ok {
+				e = stored
+			}
+		}
+		if _, err := in.CloudStore.Append(in.CloudRedaction.Apply(e), SourceLocal); err != nil {
+			metrics.IngestErrors.Inc("export")
+			return fmt.Errorf("export event: %w", err)
+		}
 	}
 	return nil
 }
