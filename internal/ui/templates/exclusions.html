@@ -12,6 +12,8 @@
     </div>
     <form method="GET" action="/" class="domain-select-form">
       <input type="hidden" name="tab" value="exclusions">
+      <label>Impact history<select name="source"><option value="local">Local retained events</option>{{ if .LokiReady }}<option value="loki" {{ if eq .HistoryBackend "loki" }}selected{{ end }}>Grafana Cloud Loki</option>{{ end }}</select></label>
+
       <label class="domain-select-label" for="domain">Select Domain:</label>
       <select name="domain" id="domain" class="domain-select">
         {{ range .Sites }}<option value="{{ .Domain }}" {{ if eq .Domain $.CurrentSite.Domain }}selected{{ end }}>{{ .Domain }}</option>{{ end }}
@@ -31,6 +33,7 @@
       <h2 class="card-title card-title-spaced">Add an exclusion</h2>
       <input type="hidden" name="csrf" value="{{ .CSRF }}">
       <input type="hidden" name="domain" value="{{ .CurrentSite.Domain }}">
+ {{ if .ExclusionPreview }}<input type="hidden" name="draft_id" value="{{ .ExclusionPreview.DraftID }}">{{ end }}
       <input type="hidden" name="tab" value="exclusions">
       <div class="grid">
         <label>Exclude by
@@ -57,6 +60,9 @@
           </select>
         </label>
       </div>
+      <label>Expires at (UTC, optional; enforced by WAF without a scheduled reload)
+        <input type="datetime-local" name="expires" value="{{ .ExclusionForm.Expires }}">
+      </label>
       <label>Note (kept with the exclusion)
         <input type="text" name="note" value="{{ .ExclusionForm.Note }}" maxlength="200" placeholder="rich text editor posts HTML">
       </label>
@@ -65,7 +71,7 @@
       </label>
       <div class="u-flex u-gap">
         <button type="submit" name="action" value="preview" class="secondary">Preview diff and impact</button>
-        <button type="submit" name="action" value="apply" data-require-reason>Add exclusion</button>
+        <button type="submit" name="action" value="apply" {{ if not .ExclusionPreview }}disabled{{ end }} data-require-reason>Add exclusion</button>
       </div>
     </form>
 
@@ -85,7 +91,7 @@
             <div class="rule-chip rule-chip--wide u-flex u-between u-wrap u-gap">
               <div>
                 <strong class="u-mono u-text-amber">{{ if eq .Ex.Type "tag" }}tag {{ .Ex.Value }}{{ else }}<a href="/?tab=rules&amp;id={{ .Ex.Value }}">{{ .Ex.Value }}</a>{{ end }}</strong>
-                <span class="u-text-sm">{{ .Describe }}</span>
+                <span class="u-text-sm">{{ .Describe }}{{ if not .Ex.Expires.IsZero }}<small> expires {{ date .Ex.Expires "2006-01-02 15:04" }} UTC</small>{{ end }}</span>
                 {{ if .RuleMsg }}<div class="u-text-sm u-text-muted">{{ .RuleMsg }}</div>{{ end }}
                 {{ if .Ex.Note }}<div class="u-text-sm u-text-faint">Note: {{ .Ex.Note }}</div>{{ end }}
               </div>

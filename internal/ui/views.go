@@ -17,6 +17,7 @@ type ruleChip struct {
 	ID   int
 	Msg  string
 	Kind string
+	Note string
 }
 
 // eventRow is one line of the event explorer.
@@ -61,13 +62,15 @@ func buildEventRows(list []*events.Event, dict *crs.Dictionary) []eventRow {
 		}
 		seen := map[int]bool{}
 		for _, h := range e.Hits {
-			if seen[h.ID] || h.Kind == crs.KindDecision {
+			if seen[h.ID] {
 				continue
 			}
 			seen[h.ID] = true
 			chip := ruleChip{ID: h.ID, Msg: h.Msg, Kind: h.Kind}
-			if r, ok := dict.Lookup(h.ID); ok && r.Msg != "" && chip.Msg == "" {
+			if r, ok := dict.Lookup(h.ID); ok {
 				chip.Msg = r.Msg
+				chip.Kind = r.Kind
+				chip.Note, _ = crs.Note(r)
 			}
 			row.Rules = append(row.Rules, chip)
 		}

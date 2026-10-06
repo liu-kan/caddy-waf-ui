@@ -94,6 +94,17 @@ func startPipeline() func() {
 			slog.Info("rule dictionary refreshed from mounted rules", "dir", dir, "crs", dict.CRSVersion, "rules", dict.Len())
 		}
 	}
+	for _, name := range []string{config.BeforeFile(), config.AfterFile()} {
+		if name == "" {
+			continue
+		}
+		mounted, err := crs.LoadFile(name)
+		if err != nil {
+			slog.Warn("could not parse custom rule dictionary", "file", name, "error", err)
+			continue
+		}
+		dict = dict.Merge(mounted)
+	}
 	rt := &ui.Runtime{Dict: dict, Loki: &events.LokiClient{URL: config.LokiURL(), User: config.LokiUser(),
 		Token: config.LokiToken(), Selector: config.LokiSelector()}}
 	defer ui.SetRuntime(rt)
@@ -104,13 +115,13 @@ func startPipeline() func() {
 		slog.Error("WAF event store disabled: check CADDY_UI_DATA_DIR (a writable volume)", "dir", config.DataDir(), "error", err)
 		return func() {}
 	}
+	store.MaxDiskBytes = config.EventsDiskMaxBytes()
 	store.OnAdd = countEvent
 	ingester := &events.Ingester{
 		Path:      config.AuditLogPath(),
 		StatePath: filepath.Join(config.DataDir(), "state", "ingest.json"),
 		Store:     store,
-		Norm:      &events.Normalizer{Dict: dict, Node: config.NodeName(), SiteForHost: newSiteResolver().resolve},
-		MaxBytes:  config.AuditMaxBytes(),
+		Norm:      &events.Normalizer{Dict: dict, Node: config.NodeName(), AllowMatchedValues: config.MatchedValues(), SiteForHost: newSiteResolver().resolve},
 	}
 	rt.Store, rt.Ingester = store, ingester
 	registerGauges(rt)
@@ -161,6 +172,9 @@ func maintain(ctx context.Context, store *events.Store) {
 		case <-ctx.Done():
 			return
 		case <-flush.C:
+			if err := service.RotateAudit(int64(config.AuditRotateMB()) << 20); err != nil {
+				slog.Warn("audit rotation failed", "error", err)
+			}
 			if err := store.Rollups().Flush(); err != nil {
 				slog.Warn("could not flush event rollups", "error", err)
 			}
@@ -176,7 +190,7 @@ func maintain(ctx context.Context, store *events.Store) {
 func syncLoki(ctx context.Context, rt *ui.Runtime, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	last := time.Now().UTC().Add(-time.Duration(config.EventsRetentionDays()) * 24 * time.Hour)
+	last := time.Now().UTC().Add(-24 * time.Hour)
 	for {
 		end := time.Now().UTC().Add(-time.Minute)
 		qctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
@@ -188,7 +202,7 @@ func syncLoki(ctx context.Context, rt *ui.Runtime, interval time.Duration) {
 			if res.Imported > 0 {
 				slog.Info("Loki sync imported events", "imported", res.Imported)
 			}
-			last = end.Add(-5 * time.Minute) // overlap: late lines are deduplicated
+			last = end.Add(-24 * time.Hour) // overlap: late lines are deduplicated
 		}
 		select {
 		case <-ctx.Done():

@@ -45,6 +45,7 @@ type Exclusion struct {
 	Param     string        `json:"param,omitempty"`
 	Path      string        `json:"path,omitempty"`
 	PathMatch string        `json:"path_match,omitempty"`
+	Expires   time.Time     `json:"expires,omitzero"`
 	Note      string        `json:"note,omitempty"`
 }
 
@@ -194,7 +195,7 @@ func (ex Exclusion) normalize() Exclusion {
 // key identifies duplicates: same rule, parameter and path scope.
 func (ex Exclusion) key() string {
 	ex = ex.normalize()
-	return strings.Join([]string{string(ex.Type), ex.Value, ex.Param, ex.Path, ex.PathMatch}, "\x00")
+	return strings.Join([]string{string(ex.Type), ex.Value, ex.Param, ex.Path, ex.PathMatch, ex.Expires.UTC().Format(time.RFC3339Nano)}, "\x00")
 }
 
 // dedupeExclusions removes repeated entries; the first occurrence (and its
@@ -216,7 +217,7 @@ func dedupeExclusions(exclusions []Exclusion) []Exclusion {
 
 // Runtime reports whether the exclusion needs a request-time ctl rule
 // (placed before CRS); otherwise it is a configure-time directive (after CRS).
-func (ex Exclusion) Runtime() bool { return ex.Path != "" }
+func (ex Exclusion) Runtime() bool { return ex.Path != "" || !ex.Expires.IsZero() }
 
 // Describe returns a short human description of the scope.
 func (ex Exclusion) Describe() string {
@@ -248,7 +249,7 @@ func pathScope(ex Exclusion) string {
 // runtime (path-scoped) exclusions.
 func (ex Exclusion) directive(id int) string {
 	ex = ex.normalize()
-	if ex.Path != "" {
+	if ex.Path != "" || !ex.Expires.IsZero() {
 		op := "@beginsWith"
 		if ex.PathMatch == PathExact {
 			op = "@streq"
@@ -263,6 +264,12 @@ func (ex Exclusion) directive(id int) string {
 			ctl = "ctl:ruleRemoveTargetByTag=" + ex.Value + ";ARGS:" + ex.Param
 		default:
 			ctl = "ctl:ruleRemoveByTag=" + ex.Value
+		}
+		if !ex.Expires.IsZero() {
+			if ex.Path == "" {
+				return fmt.Sprintf(`SecRule TIME_EPOCH "@lt %d" "id:%d,phase:1,pass,t:none,nolog,%s"`, ex.Expires.Unix(), id, ctl)
+			}
+			return fmt.Sprintf("SecRule TIME_EPOCH \"@lt %d\" \"id:%d,phase:1,pass,t:none,nolog,chain\"\nSecRule REQUEST_FILENAME \"%s %s\" \"t:none,%s\"", ex.Expires.Unix(), id, op, ex.Path, ctl)
 		}
 		return fmt.Sprintf(`SecRule REQUEST_FILENAME "%s %s" "id:%d,phase:1,pass,t:none,nolog,%s"`, op, ex.Path, id, ctl)
 	}

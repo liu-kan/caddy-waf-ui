@@ -10,18 +10,24 @@
       </h1>
       <p class="banner-sub">
         {{ date $e.TS "2006-01-02 15:04:05" }} UTC · site <code>{{ $e.Site }}</code>{{ if and $e.Host (ne $e.Host $e.Site) }} (host <code>{{ $e.Host }}</code>){{ end }}
-        · client <a href="/?tab=events&amp;ip={{ $e.ClientIP }}&amp;range=14d" class="u-mono">{{ $e.ClientIP }}</a>
+        · client <a href="/?tab=events&amp;ip={{ $e.ClientIP }}&amp;range=14d&amp;source={{ .HistoryBackend }}" class="u-mono">{{ $e.ClientIP }}</a>
         · transaction <code>{{ $e.TxID }}</code> · {{ .EventSource }}{{ if $e.Node }} on <code>{{ $e.Node }}</code>{{ end }}
       </p>
       {{ if $e.QueryKeys }}<p class="banner-sub">Query parameters (values are not stored): {{ range $e.QueryKeys }}<code>{{ . }}</code> {{ end }}</p>{{ end }}
     </div>
     <div class="u-flex u-col u-gap">
-      <a href="/?tab=events&amp;path={{ $e.Path }}&amp;site={{ $e.Site }}&amp;range=14d" class="secondary outline btn-compact">Same path</a>
-      <a href="/?tab=events&amp;ip={{ $e.ClientIP }}&amp;range=14d" class="secondary outline btn-compact">Same client</a>
+      <a href="/?tab=events&amp;path={{ $e.Path }}&amp;site={{ $e.Site }}&amp;range=14d&amp;source={{ .HistoryBackend }}" class="secondary outline btn-compact">Same path</a>
+      <a href="/?tab=events&amp;ip={{ $e.ClientIP }}&amp;range=14d&amp;source={{ .HistoryBackend }}" class="secondary outline btn-compact">Same client</a>
+      <a href="/?tab=policy&amp;domain={{ $e.Site }}&amp;source={{ .HistoryBackend }}" class="secondary outline btn-compact">Review site policy</a>
+      <a href="/?tab=analysis&amp;domain={{ $e.Site }}&amp;range=14d&amp;source={{ .HistoryBackend }}" class="secondary outline btn-compact">Analyze this site</a>
       {{ if .ExploreURL }}<a href="{{ .ExploreURL }}" class="secondary outline btn-compact" rel="noopener noreferrer" target="_blank">Open in Grafana Explore</a>{{ end }}
     </div>
   </div>
-  {{ if .CRSMismatch }}<p class="banner-sub u-text-amber">This event was produced by CRS {{ $e.CRS }} while the rule dictionary is CRS {{ .DictVersion }}.</p>{{ end }}
+  {{ if .HistoryError }}<p role="alert" class="u-text-danger">{{ .HistoryError }}</p>{{ end }}
+ {{ if .HistoryWarning }}<p class="u-text-amber">{{ .HistoryWarning }}</p>{{ end }}
+ {{ if $e.HitsTruncated }}<p class="u-text-amber">Some hits were truncated; estimates are incomplete.</p>{{ end }}
+ {{ if $e.HitsIncomplete }}<p class="u-text-amber">This record contains rule ids without full hit details; scores cannot be reliably reconstructed.</p>{{ end }}
+ {{ if .CRSMismatch }}<p class="banner-sub u-text-amber">This event was produced by CRS {{ $e.CRS }} while the rule dictionary is CRS {{ .DictVersion }}.</p>{{ end }}
 </div>
 
 <div class="grid-metrics">
@@ -57,6 +63,7 @@
     </div>
   </div>
   <div class="card-box-body u-flex u-col u-gap">
+    {{ if .NoDecision }}<p class="u-text-amber">Coraza interrupted this request without a threshold decision or direct-block rule. The usual cause is a request body above the site's body limit (HTTP 413 in On mode, see Policy); a custom rule with <code>nolog</code> can also do this.</p>{{ end }}
     {{ range .EventHits }}
       <article class="hit-card {{ if .Counted }}hit-card--counted{{ end }}">
         <div class="u-flex u-between u-wrap u-gap">
@@ -87,17 +94,60 @@
   </div>
 </div>
 
+<form method="POST" action="/events/{{ $e.TxID }}/feedback" class="card-box card-box--padded">
+ <input type="hidden" name="csrf" value="{{ .CSRF }}"><input type="hidden" name="node" value="{{ $e.Node }}"><input type="hidden" name="ts" value="{{ date $e.TS "2006-01-02T15:04:05.999999999Z07:00" }}"><input type="hidden" name="source" value="{{ .HistoryBackend }}"><input type="hidden" name="tab" value="event"><input type="hidden" name="tx" value="{{ $e.TxID }}">
+ <h2 class="card-title">Operator review</h2>{{ with .Feedback }}<p>{{ .Decision }} · {{ .Reason }} · {{ date .Updated "2006-01-02 15:04" }} UTC</p>{{ end }}
+ <label>Decision<select name="decision"><option value="unreviewed">Unreviewed</option><option value="false_positive">Confirmed false positive</option><option value="attack">Confirmed attack</option></select></label>
+ <label>Reason<input name="reason" maxlength="500" required></label><button class="secondary">Record decision</button>
+ <small>Labels are operator decisions. Exclusions still require a separate preview and apply.</small>
+</form>
+
+{{ if .LocalPossible }}
+<div class="card-box">
+  <div class="card-box-header">
+    <div>
+      <h2 class="card-title">Local match context</h2>
+      <small class="u-text-faint">Read on demand from this node's raw audit log or its rotated archives (kept 48 hours). Never stored in events or sent to Grafana Cloud. Credential-like variables stay hidden.</small>
+    </div>
+    {{ if not .LocalRecord }}<a class="secondary outline btn-compact" href="/?tab=event&amp;tx={{ $e.TxID }}&amp;node={{ $e.Node }}&amp;raw=1">Show matched values</a>{{ end }}
+  </div>
+  {{ with .LocalRecord }}
+  <div class="card-box-body">
+    <p class="u-text-sm"><code>{{ .Method }} {{ .URI }}</code> <span class="u-text-dim">from {{ .File }}</span></p>
+  </div>
+  <div class="table-scroll">
+    <table class="table-compact u-text-md">
+      <thead><tr><th scope="col">Rule</th><th scope="col">Variable</th><th scope="col">Matched</th><th scope="col">Value excerpt</th></tr></thead>
+      <tbody>
+        {{ range .Matches }}
+          <tr>
+            <td><a href="/?tab=rules&amp;id={{ .ID }}" class="rule-pill rule-pill--detection">{{ .ID }}</a></td>
+            <td class="u-mono">{{ .Var }}</td>
+            <td class="cell-uri"><code>{{ .Data }}</code></td>
+            <td class="cell-uri"><code>{{ .Value }}</code></td>
+          </tr>
+        {{ else }}
+          <tr><td colspan="4" class="table-empty">The raw record carries no match details.</td></tr>
+        {{ end }}
+      </tbody>
+    </table>
+  </div>
+  {{ end }}
+  {{ if .LocalRecordError }}<p class="card-box-body u-text-sm u-text-amber">{{ .LocalRecordError }}.</p>{{ end }}
+</div>
+{{ end }}
+
 <div class="card-box">
   <div class="card-box-header">
     <div>
       <h2 class="card-title">If this was a false positive</h2>
-      <small class="u-text-faint">Narrowest exclusions first. The impact replays the last 14 days of this site's events with the exclusion applied. Only exclude when the request was legitimate.</small>
+      <small class="u-text-faint">Narrowest exclusions first. The estimate models up to 2,000 matching events of the last 14 days of this site's events with the exclusion applied. Only exclude when the request was legitimate.</small>
     </div>
   </div>
   {{ if .Suggestions }}
   <div class="table-scroll">
     <table class="table-compact u-text-md">
-      <thead><tr><th scope="col">Rule</th><th scope="col">Scope</th><th scope="col">Exclusion</th><th scope="col">Would unblock</th><th scope="col">Attack sources affected</th><th scope="col"></th></tr></thead>
+      <thead><tr><th scope="col">Rule</th><th scope="col">Scope</th><th scope="col">Exclusion</th><th scope="col">Would unblock</th><th scope="col">Suspected attack sources affected</th><th scope="col"></th></tr></thead>
       <tbody>
         {{ range .Suggestions }}
           <tr>
@@ -106,7 +156,7 @@
             <td class="u-text-sm">{{ .Exclusion.Describe }}</td>
             <td class="u-mono">{{ .Impact.Unblocked }} event(s) · {{ .Impact.Sources }} source(s)</td>
             <td class="u-mono {{ if .Impact.AttackSources }}u-text-danger{{ end }}">{{ .Impact.AttackSources }}{{ if .Impact.AttackEvents }} ({{ .Impact.AttackEvents }} events){{ end }}</td>
-            <td><a class="btn-link" href="/?tab=exclusions&amp;domain={{ $e.Site }}&amp;rule={{ .Exclusion.Value }}&amp;path={{ .Exclusion.Path }}&amp;path_match={{ .Exclusion.PathMatch }}&amp;param={{ .Exclusion.Param }}">Review →</a></td>
+            <td><a class="btn-link" href="/?tab=exclusions&amp;domain={{ $e.Site }}&amp;rule={{ .Exclusion.Value }}&amp;path={{ .Exclusion.Path }}&amp;path_match={{ .Exclusion.PathMatch }}&amp;param={{ .Exclusion.Param }}&amp;source={{ $.HistoryBackend }}">Review →</a></td>
           </tr>
         {{ end }}
       </tbody>
@@ -130,7 +180,7 @@
 {{ else }}
 <div class="card-box card-box--padded">
   <h1 class="banner-title">Event not found</h1>
-  <p class="card-box-empty">The event is not in memory: it may be older than the retention window or the memory limit. Search the <a href="/?tab=events">event list</a> or Grafana Explore.</p>
+  <p class="card-box-empty">The event was not found in retained files or the configured cloud history. Search the <a href="/?tab=events">event list</a> or Grafana Explore.</p>
 </div>
 {{ end }}
 {{end}}

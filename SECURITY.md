@@ -75,7 +75,7 @@ Default Compose administration uses an owner-restricted Unix socket, mounted onl
 
 HTTP/HTTPS endpoints remain supported for existing deployments. This transport carries no admin credential or configured client certificate. Do not publish its port or assume that different Docker bridge memberships prevent connectivity; verify firewall/routing boundaries on the actual platform. Host/Origin checks do not authenticate callers. The CADDY_ADMIN_URL value is operator-controlled, schemes and paths are validated, redirects are refused, and Unix transport ignores proxies.
 
-The read-back check verifies literal hosts after /load, not full TLS/auth/WAF equivalence. On verification failure after a successful load, the service restores files and reloads the restored configuration. Recovery failure is returned explicitly; actual request validation is still necessary.
+The read-back check verifies literal hosts and WAF revisions after /load. An operator-configured origin probe additionally checks the revision and engine in the audit log; without a probe URL the journal explicitly records that request verification was skipped. Neither check proves full TLS/auth equivalence. On verification failure after a successful load, the service restores files and reloads the restored configuration. Recovery failure is returned explicitly; actual request validation is still necessary.
 
 ## UI Bind Default - LAN Exposure (SC-8)
 
@@ -120,12 +120,16 @@ Documented design decisions, not defects:
   redeploys with a rotated `CADDY_UI_TOKEN`. This is the accepted trade-off
   of a single-operator admin console: treat the token as full admin access
   and rotate it when it may have been exposed.
-- **No rate limiting on `/login` or the API.** Brute force is mitigated by
-  constant-time token comparison plus a high-entropy token, not by
-  throttling. Rate limiting is intentionally left to the deployment layer:
-  Caddy (e.g. the `rate_limit` directive) or the reverse proxy in front of
-  the UI.
+- Login and API sliding-window rate limits are implemented in this UI process. Keep any independent ingress protections required by the deployment.
 
 ## Fork deployment defaults
 
-The supplied Compose uses an owner-restricted shared Unix socket for administration, with no TCP admin listener. Applications do not mount this volume. HTTP/HTTPS remains an operator-selected compatibility transport; separate bridge membership alone is not a routing/firewall guarantee. Caddy and UI run as UID/GID 65532; the UI receives only audit logs read-only, not certificate data. New logs/overlays are 0640 with 0750 directories. Default audit parts AHKZ omit request/response headers and bodies, but matched rule messages may still expose sensitive data. UI authentication does not authenticate the Caddy Admin API; its socket ownership or operator-selected network remains an independent trust boundary. Upstream signature examples above apply to upstream images; this fork builds its own UI from source.
+The supplied Compose uses an owner-restricted shared Unix socket for administration, with no TCP admin listener. Applications do not mount this volume. HTTP/HTTPS remains an operator-selected compatibility transport; separate bridge membership alone is not a routing/firewall guarantee. Caddy and UI run as UID/GID 65532; the UI receives only the audit directory read-write for rename/reopen rotation, not certificate data. New logs/overlays are 0640 with 0750 directories. The default AHKZ audit parts omit request headers; the optional ABHKZ keeps them locally. Raw rule messages may still expose sensitive data. Alloy ships only redacted normalized events and allowlisted metadata. UI authentication does not authenticate the Caddy Admin API; its socket ownership or operator-selected network remains an independent trust boundary. Upstream signature examples above apply to upstream images; this fork builds its own UI from source.
+
+## Telemetry and retained data
+
+The UI audit-directory mount is read-write solely for raw-log rename/reopen rotation; it has no certificate-volume mount. Raw audit files contain URIs and, with the optional ABHKZ parts, request headers and credentials; they must remain local with access restricted. The cloud profile ships only normalized WAF events and allowlisted metadata. Matched values are hidden by default, credential variables and unknown logdata are always hidden, and runtime diagnostic message text stays local. Reviewed draft content, diffs, operator reasons, feedback and raw audit records are not cloud inputs.
+
+Use separate Loki read and write tokens, supplied through environment/secret management. The local UI holds the read token; Alloy holds the write token. Alloy has no Docker/Admin socket. IP, transaction ID, path and rule CSV are JSON fields, not indexed labels. Metrics export is optional and drops per-rule counters by default to constrain series count.
+
+Probe destinations are operator-controlled JSON configuration, never derived from Host headers or UI requests. HTTP/HTTPS URLs are validated, redirects are refused and TLS verification stays enabled. Probes perform GET requests, so choose a safe origin path without side effects. Authenticated UI policy/exclusion forms apply an exact reviewed artifact and reject edited intent, expired drafts or changed overlay/base/custom-file hashes. The direct authenticated API remains an automation interface with validation, journaling and compensation.

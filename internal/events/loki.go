@@ -48,6 +48,10 @@ const maxLokiLimit = 5000
 
 // queryRange runs one /loki/api/v1/query_range request (direction forward).
 func (c *LokiClient) queryRange(ctx context.Context, query string, start, end time.Time, limit int) ([]lokiEntry, error) {
+	return c.queryDirection(ctx, query, start, end, limit, "forward")
+}
+
+func (c *LokiClient) queryDirection(ctx context.Context, query string, start, end time.Time, limit int, direction string) ([]lokiEntry, error) {
 	base, err := url.Parse(strings.TrimRight(c.URL, "/"))
 	if err != nil || (base.Scheme != "https" && base.Scheme != "http") || base.Host == "" || base.User != nil {
 		return nil, fmt.Errorf("invalid CADDY_UI_LOKI_URL")
@@ -55,9 +59,9 @@ func (c *LokiClient) queryRange(ctx context.Context, query string, start, end ti
 	params := url.Values{}
 	params.Set("query", query)
 	params.Set("start", strconv.FormatInt(start.UnixNano(), 10))
-	params.Set("end", strconv.FormatInt(end.UnixNano(), 10))
+	params.Set("end", strconv.FormatInt(end.UnixNano()-1, 10))
 	params.Set("limit", strconv.Itoa(limit))
-	params.Set("direction", "forward")
+	params.Set("direction", direction)
 	endpoint := base.JoinPath("loki", "api", "v1", "query_range")
 	endpoint.RawQuery = params.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
@@ -67,16 +71,19 @@ func (c *LokiClient) queryRange(ctx context.Context, query string, start, end ti
 	req.SetBasicAuth(c.User, c.Token)
 	client := c.HTTP
 	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
+		client = &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
 	resp, err := client.Do(req) //nolint:gosec // G704: operator-configured Loki endpoint (CADDY_UI_LOKI_URL), validated above.
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, (16<<20)+1))
 	if err != nil {
 		return nil, err
+	}
+	if len(body) > 16<<20 {
+		return nil, errors.New("loki response exceeds the 16 MiB memory budget; narrow the query")
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("loki query_range: HTTP %d: %s", resp.StatusCode, truncate(string(body), 300))
@@ -84,6 +91,9 @@ func (c *LokiClient) queryRange(ctx context.Context, query string, start, end ti
 	var parsed lokiResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return nil, fmt.Errorf("loki query_range: %w", err)
+	}
+	if parsed.Status != "success" {
+		return nil, errors.New("loki returned an unsuccessful query status")
 	}
 	var out []lokiEntry
 	for _, stream := range parsed.Data.Result {
@@ -119,48 +129,58 @@ func Backfill(ctx context.Context, c *LokiClient, store *Store, from, to time.Ti
 	if selector == "" {
 		selector = `{job="caddy-waf-ui",kind="event"}`
 	}
-	for windowStart := from; windowStart.Before(to); windowStart = windowStart.Add(24 * time.Hour) {
-		windowEnd := windowStart.Add(24 * time.Hour)
-		if windowEnd.After(to) {
-			windowEnd = to
+	if !from.Before(to) || to.Sub(from) > 31*24*time.Hour {
+		return res, errors.New("invalid Loki import range (maximum 31 days)")
+	}
+	var importWindow func(time.Time, time.Time) error
+	importWindow = func(start, end time.Time) error {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-		cursor := windowStart
-		for {
-			if err := ctx.Err(); err != nil {
-				return res, err
-			}
-			entries, err := c.queryRange(ctx, selector, cursor, windowEnd, maxLokiLimit)
-			res.Queries++
+		if res.Queries >= 128 {
+			return fmt.Errorf("%w: query budget reached; narrow the range", ErrIncompleteHistory)
+		}
+		entries, err := c.queryRange(ctx, selector, start, end, maxLokiLimit)
+		res.Queries++
+		if err != nil {
+			return err
+		}
+		res.Fetched += len(entries)
+		for _, entry := range entries {
+			e, err := DecodeEventLine(entry.Line, entry.TS)
 			if err != nil {
-				return res, err
+				return err
 			}
-			res.Fetched += len(entries)
-			newOnPage := 0
-			for _, entry := range entries {
-				var e Event
-				if json.Unmarshal([]byte(entry.Line), &e) != nil || e.TxID == "" || e.Kind != "event" {
-					continue
-				}
-				if e.Hits == nil {
-					e.Hits = []Hit{}
-				}
-				added, err := store.Append(&e, SourceLoki)
-				if err != nil {
-					return res, err
-				}
-				if added {
-					res.Imported++
-					newOnPage++
-				}
+			added, err := store.Append(e, SourceLoki)
+			if err != nil {
+				return err
 			}
-			if len(entries) < maxLokiLimit {
-				break
+			if added {
+				res.Imported++
 			}
-			last := entries[len(entries)-1].TS
-			if !last.After(cursor) && newOnPage == 0 {
-				break // a full page at one timestamp: nothing more to learn
-			}
-			cursor = last
+		}
+		if len(entries) < maxLokiLimit {
+			return nil
+		}
+		if entries[0].TS.Equal(entries[len(entries)-1].TS) {
+			return fmt.Errorf("%w: at least %d entries share timestamp %s", ErrIncompleteHistory, maxLokiLimit, entries[0].TS.Format(time.RFC3339Nano))
+		}
+		if end.Sub(start) <= time.Nanosecond {
+			return ErrIncompleteHistory
+		}
+		mid := start.Add(end.Sub(start) / 2)
+		if err := importWindow(start, mid); err != nil {
+			return err
+		}
+		return importWindow(mid, end)
+	}
+	for start := from; start.Before(to); start = start.Add(24 * time.Hour) {
+		end := start.Add(24 * time.Hour)
+		if end.After(to) {
+			end = to
+		}
+		if err := importWindow(start, end); err != nil {
+			return res, err
 		}
 	}
 	return res, nil

@@ -136,19 +136,9 @@ func DataDir() string { return envOr("CADDY_UI_DATA_DIR", "/ui-data") }
 // are deleted. Daily rollups are kept.
 func EventsRetentionDays() int { return positiveIntEnv("CADDY_UI_EVENTS_RETENTION_DAYS", 14) }
 
-// EventsMemoryMax returns CADDY_UI_EVENTS_MEMORY_MAX (default 100000): the
+// EventsMemoryMax returns CADDY_UI_EVENTS_MEMORY_MAX (default 1000): the
 // number of recent events kept in memory for queries and impact estimates.
-func EventsMemoryMax() int { return positiveIntEnv("CADDY_UI_EVENTS_MEMORY_MAX", 100000) }
-
-// AuditMaxBytes returns CADDY_UI_AUDIT_MAX_BYTES (default 0 = never): once
-// the Coraza audit log exceeds this size and every complete record has been
-// ingested, the UI truncates it. Requires a read-write audit mount.
-func AuditMaxBytes() int64 {
-	if v, err := strconv.ParseInt(os.Getenv("CADDY_UI_AUDIT_MAX_BYTES"), 10, 64); err == nil && v > 0 {
-		return v
-	}
-	return 0
-}
+func EventsMemoryMax() int { return positiveIntEnv("CADDY_UI_EVENTS_MEMORY_MAX", 1000) }
 
 // IngestInterval returns CADDY_UI_INGEST_INTERVAL (default 2s).
 func IngestInterval() time.Duration { return durationEnv("CADDY_UI_INGEST_INTERVAL", 2*time.Second) }
@@ -224,4 +214,23 @@ func durationEnv(key string, fallback time.Duration) time.Duration {
 		return v
 	}
 	return fallback
+}
+
+// MatchedValues is opt-in; credentials and unrecognized data remain hidden.
+func MatchedValues() bool { return os.Getenv("CADDY_UI_MATCHED_VALUES") == "true" }
+
+// EventsDiskMaxBytes bounds event storage without deleting unsent entries.
+func EventsDiskMaxBytes() int64 {
+	return int64(positiveIntEnv("CADDY_UI_EVENTS_DISK_MAX_MB", 128)) << 20
+}
+
+// ProbeURLs maps managed sites to operator-selected origin URLs.
+func ProbeURLs() string { return os.Getenv("CADDY_UI_PROBE_URLS") }
+
+// AuditRotateMB bounds raw files by rename and writer reopening.
+func AuditRotateMB() int {
+	if os.Getenv("CADDY_UI_AUDIT_ROTATE_MB") == "0" {
+		return 0
+	}
+	return positiveIntEnv("CADDY_UI_AUDIT_ROTATE_MB", 32)
 }

@@ -108,6 +108,7 @@ http://example.com:%s {
 	for key, value := range map[string]string{
 		"CADDY_UI_MANAGED_DIR": managed, "CADDY_UI_INCLUDE_DIR": managed,
 		"CADDY_UI_BACKUP_DIR": backups, "CADDY_UI_CADDYFILE": sourcePath,
+		"CADDY_UI_DATA_DIR": filepath.Join(tmp, "ui-data"), "CADDY_UI_PROBE_URLS": "",
 		"CADDY_ADMIN_URL": "http://" + adminAddress, "CADDY_UI_AUDIT_LOG": auditPath,
 		"CADDY_UI_WAF_BEFORE_FILE": before, "CADDY_UI_WAF_AFTER_FILE": after,
 		"CADDY_UI_CRS_MODE": "embedded", "CADDY_UI_RESPONSE_BODY_ACCESS": "Off",
@@ -208,6 +209,13 @@ http://example.com:%s {
 		t.Fatal(err)
 	}
 	status("/probe", 403)
+	expires := time.Now().Add(4 * time.Second).Truncate(time.Second)
+	if err := service.UpdateExclusions("example.com", []waf.Exclusion{{Type: waf.ExcludeByID, Value: "1000001", Path: "/probe", PathMatch: "exact", Expires: expires}}, ""); err != nil {
+		t.Fatal(err)
+	}
+	status("/probe", 200)
+	time.Sleep(time.Until(expires.Add(100 * time.Millisecond)))
+	status("/probe", 403)
 	if err := service.UpdateExclusions("example.com", []waf.Exclusion{{Type: waf.ExcludeByID, Value: "1000001"}}, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -231,6 +239,17 @@ http://example.com:%s {
 	}
 	status("/probe", 200)
 	status("/other-probe", 403)
+	if err := service.RotateAudit(1); err != nil {
+		t.Fatal(err)
+	}
+	status("/other-probe", 403)
+	archives, err := filepath.Glob(auditPath + ".rotated-*")
+	if err != nil || len(archives) != 1 {
+		t.Fatalf("rotation archive: %v %v", archives, err)
+	}
+	if fi, err := os.Stat(auditPath); err != nil || fi.Size() == 0 {
+		t.Fatal("new WAF writer did not reopen the audit file")
+	}
 	if err := service.UpdateWAFMode("example.com", domain.ModeOff, ""); err != nil {
 		t.Fatal(err)
 	}

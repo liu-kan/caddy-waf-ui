@@ -139,7 +139,7 @@ func TestStoreRetentionAndMemoryBound(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if st := s.Stats(); st.Count != 2 || s.Has("0") {
+	if st := s.Stats(); st.Count != 2 || !s.Has("0") {
 		t.Fatalf("memory bound: %+v", st)
 	}
 	stale := filepath.Join(dir, "events-2000-01-01.jsonl")

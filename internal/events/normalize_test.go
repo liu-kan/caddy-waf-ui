@@ -2,6 +2,7 @@ package events
 
 import (
 	"bufio"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -60,7 +61,7 @@ func TestNormalizeDetectionOnlyDecision(t *testing.T) {
 		t.Fatalf("crs/rule ids: %q %q", e.CRS, e.RuleIDs)
 	}
 	h := e.Hits[0]
-	if h.Kind != crs.KindDetection || h.Score != 5 || h.PL != 1 || h.Var != "REQUEST_FILENAME" || h.Data != ".git/" || h.Severity != "CRITICAL" || h.Category != "lfi" {
+	if h.Kind != crs.KindDetection || h.Score != 5 || h.PL != 1 || h.Var != "REQUEST_FILENAME" || h.Data != redacted || h.Severity != "CRITICAL" || h.Category != "lfi" {
 		t.Fatalf("930130 hit: %+v", h)
 	}
 	if e.Hits[1].Kind != crs.KindDecision || e.Hits[1].Severity != "" {
@@ -123,8 +124,8 @@ func TestNormalizeRedactsCredentials(t *testing.T) {
 			}
 		case "ARGS:json.messages.0.content":
 			sawContent = true
-			if h.Data == redacted {
-				t.Fatalf("ordinary content must stay visible for tuning: %+v", h)
+			if h.Data != redacted {
+				t.Fatalf("ordinary content must be hidden by default: %+v", h)
 			}
 		}
 	}
@@ -175,6 +176,22 @@ func TestNormalizeWithoutSignatureUsesHostMapping(t *testing.T) {
 	}
 	if _, err := n.Normalize([]byte(`{"transaction":{}}`)); err == nil {
 		t.Fatal("records without a transaction id must be rejected")
+	}
+}
+
+// ruleLessRecord was written by Coraza v3.8.0 for a plain 404 response:
+// RelevantOnly also logs every status matched by the recommended
+// SecAuditLogRelevantStatus, even when no rule matched.
+const ruleLessRecord = `{"transaction":{"timestamp":"2026/10/06 05:38:37","unix_timestamp":1791290317883451000,` +
+	`"id":"HbNAAieffPTUbSso","client_ip":"127.0.0.1","client_port":0,"host_ip":"","host_port":0,"server_id":"localhost",` +
+	`"request":{"method":"GET","protocol":"HTTP/1.1","uri":"/notfound","http_version":"","headers":null,"body":"","files":null,"args":{},"length":0},` +
+	`"producer":{"connector":"","version":"","server":"","rule_engine":"DetectionOnly","stopwatch":"1791290317883451000 665000; combined=610000, p1=211000, p2=350000, p3=29000, p4=0, p5=20000",` +
+	`"rulesets":["OWASP_CRS/4.25.0"]},"highest_severity":"","is_interrupted":false}}`
+
+func TestNormalizeSkipsRecordsWithoutRuleMatches(t *testing.T) {
+	n := &Normalizer{Dict: crs.Default()}
+	if _, err := n.Normalize([]byte(ruleLessRecord)); !errors.Is(err, ErrNoRuleMatch) {
+		t.Fatalf("a record without rule matches is not a WAF event, got %v", err)
 	}
 }
 

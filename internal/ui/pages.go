@@ -134,11 +134,11 @@ func takeFlashCookie(w http.ResponseWriter, r *http.Request) (string, bool) {
 
 // cleanURL returns the same path without the ?flash= parameter (one-shot:
 // the toast is consumed with a clean redirect; the cookie carries the
-// message). It preserves tab/domain/search/actionFilter/page so the context
+// message). It preserves the supported page and event filters so the context
 // of the view survives the hop.
 func cleanURL(q url.Values) string {
 	clean := url.Values{}
-	for _, key := range []string{"tab", "domain", "search", "actionFilter", "page"} {
+	for _, key := range []string{"tab", "domain", "search", "actionFilter", "page", "tx", "node", "source", "ts", "range", "site", "ip", "path", "rule", "q", "cursor"} {
 		if value := q.Get(key); value != "" {
 			clean.Set(key, value)
 		}
@@ -409,6 +409,7 @@ func NewPagesMux() *http.ServeMux {
 	mux.HandleFunc("POST /sites/{domain}/exclusions/remove", HandleFormRemoveExclusion)
 	mux.HandleFunc("POST /sites/{domain}/policy", HandleFormPolicy)
 	mux.HandleFunc("POST /events/backfill", HandleFormBackfill)
+	mux.HandleFunc("POST /events/{tx}/feedback", HandleFormFeedback)
 	mux.HandleFunc("POST /sites/{domain}/iprules", HandleFormAddIPRule)
 	mux.HandleFunc("POST /sites/{domain}/rollback", HandleFormRollback)
 	mux.HandleFunc("POST /logout", HandleLogout)

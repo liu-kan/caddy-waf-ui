@@ -41,7 +41,7 @@ type Actor struct {
 
 func baselineOptions() waf.Options {
 	return waf.Options{
-		CRSMode: config.CRSMode(), CorazaConfig: config.CorazaConfig(),
+		VerifyProbe: config.ProbeURLs() != "", CRSMode: config.CRSMode(), CorazaConfig: config.CorazaConfig(),
 		CRSSetup: config.CRSSetup(), CRSRules: config.CRSRules(),
 		BeforeFile: config.BeforeFile(), AfterFile: config.AfterFile(),
 		ResponseBodyAccess: config.ResponseBodyAccess(), AuditParts: config.AuditLogParts(),
@@ -204,6 +204,7 @@ type chainOpts struct {
 	regenerate func() (waf.Generated, error)
 	// action and summary describe the change in the journal.
 	action, summary string
+	base            string
 }
 
 // diffIgnore hides lines that change on every generation.
@@ -219,10 +220,21 @@ func diffIgnore(line string) bool {
 func runChain(domainName string, actor Actor, opts chainOpts) error {
 	changeMu.Lock()
 	defer changeMu.Unlock()
+	if opts.base != "" {
+		base, err := baselineHash(domainName)
+		if err != nil {
+			return err
+		}
+		if base != opts.base {
+			return ErrStaleDraft
+		}
+	}
 	remoteIP := actor.RemoteIP
+	stages := []journal.Stage{{Name: "validate", Result: "success"}}
+	configSHA := ""
 	record := func(result, rev, diff string, err error) {
 		entry := journal.Entry{Site: domainName, Action: opts.action, Summary: opts.summary, Reason: actor.Reason,
-			Actor: actor.User, RemoteIP: actor.RemoteIP, Revision: rev, Result: result, Diff: diff}
+			Actor: actor.User, RemoteIP: actor.RemoteIP, Revision: rev, Result: result, Diff: diff, Stages: stages, SHA256: configSHA}
 		if err != nil {
 			entry.Error = err.Error()
 		}
@@ -295,12 +307,18 @@ func runChain(domainName string, actor Actor, opts chainOpts) error {
 			return fail(errors.Join(err, restoreErr))
 		}
 		expect = []string{gen.Revision}
+		configSHA = checksum(gen.Content)
 		diff = textdiff.Unified(string(previousWAF), string(gen.Content), 2, diffIgnore)
 	} else if current, _, rerr := readPreviousState(opts.confPath); rerr == nil {
 		diff = textdiff.Unified(string(previous), string(current), 2, diffIgnore)
 	}
 
 	if err := caddy.ReloadExpect(expect); err != nil {
+		stages = append(stages, journal.Stage{Name: "load", Result: "failed"})
+		if caddy.WasApplied(err) {
+			stages[len(stages)-1].Result = "success"
+			stages = append(stages, journal.Stage{Name: "readback", Result: "failed"})
+		}
 		restoreErr := restore()
 		reloadStatus := fmt.Sprintf("failed: %v", err)
 		if restoreErr != nil {
@@ -320,6 +338,30 @@ func runChain(domainName string, actor Actor, opts chainOpts) error {
 		return fail(fmt.Errorf("error reloading Caddy: %w", err))
 	}
 
+	stages = append(stages, journal.Stage{Name: "load", Result: "success"}, journal.Stage{Name: "readback", Result: "success"})
+	if gen.Revision != "" {
+		probe, probeErr := verifyOrigin(gen)
+		if probeErr != nil {
+			probe.Result = "failed"
+			probe.Detail = probeErr.Error()
+			stages = append(stages, probe)
+			restoreErr := restore()
+			if restoreErr == nil {
+				restoreErr = caddy.Reload()
+			}
+			recovery := journal.Stage{Name: "compensate", Result: "success"}
+			if restoreErr != nil {
+				recovery.Result = "failed"
+				recovery.Detail = restoreErr.Error()
+			}
+			stages = append(stages, recovery)
+			return fail(errors.Join(fmt.Errorf("origin verification failed: %w", probeErr), restoreErr))
+		}
+		stages = append(stages, probe)
+		if err := saveLastGood(domainName, gen, stages); err != nil {
+			slog.Warn("could not save last_good metadata", "error", err)
+		}
+	}
 	logs.LogAction(opts.successEvent, domainName, opts.from, opts.to, remoteIP, "success")
 	metrics.Reloads.Inc(journal.ResultSuccess)
 	record(journal.ResultSuccess, gen.Revision, diff, nil)
@@ -553,6 +595,8 @@ func ApplyRollback(actor Actor, domainName, backupID string) error {
 type Preview struct {
 	Diff    string
 	Content string
+	DraftID string
+	SHA256  string
 }
 
 // PreviewPolicy previews a policy change.

@@ -8,6 +8,7 @@
     </div>
     <form method="GET" action="/" class="domain-select-form">
       <input type="hidden" name="tab" value="analysis">
+ <label>Storage<select name="source"><option value="local">Local retained events</option>{{ if .LokiReady }}<option value="loki" {{ if eq .HistoryBackend "loki" }}selected{{ end }}>Grafana Cloud Loki</option>{{ end }}</select></label>
       <label class="domain-select-label" for="an-domain">Site:</label>
       <select name="domain" id="an-domain" class="domain-select">
         <option value="">All sites</option>
@@ -20,6 +21,8 @@
     </form>
   </div>
   {{ template "pipeline-status" . }}
+ {{ if .HistoryError }}<p role="alert" class="u-text-danger">{{ .HistoryError }}</p>{{ end }}
+ {{ if .HistoryWarning }}<p class="u-text-amber">{{ .HistoryWarning }}</p>{{ end }}
 </div>
 
 {{ with .Report }}

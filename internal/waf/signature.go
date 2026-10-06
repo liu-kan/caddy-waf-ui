@@ -12,14 +12,15 @@ import (
 // messages[].actionset with part K), so each event names its site, policy and
 // revision without any correlation by time.
 type Signature struct {
-	Site        string
-	Revision    string
-	Mode        string
-	BlockingPL  int
-	DetectionPL int
-	Inbound     int
-	Outbound    int
-	Tuning      bool
+	Site          string
+	Revision      string
+	Mode          string
+	BlockingPL    int
+	DetectionPL   int
+	Inbound       int
+	Outbound      int
+	Tuning        bool
+	EarlyBlocking bool
 }
 
 const signaturePrefix = "caddy-waf-ui;v=1;"
@@ -31,8 +32,12 @@ func (s Signature) String() string {
 	if s.Tuning {
 		tune = "1"
 	}
-	return fmt.Sprintf("%ssite=%s;rev=%s;mode=%s;bpl=%d;dpl=%d;in=%d;out=%d;tune=%s",
-		signaturePrefix, s.Site, s.Revision, s.Mode, s.BlockingPL, s.DetectionPL, s.Inbound, s.Outbound, tune)
+	early := "0"
+	if s.EarlyBlocking {
+		early = "1"
+	}
+	return fmt.Sprintf("%ssite=%s;rev=%s;mode=%s;bpl=%d;dpl=%d;in=%d;out=%d;tune=%s;early=%s",
+		signaturePrefix, s.Site, s.Revision, s.Mode, s.BlockingPL, s.DetectionPL, s.Inbound, s.Outbound, tune, early)
 }
 
 // ParseSignature parses one component name.
@@ -63,6 +68,8 @@ func ParseSignature(name string) (Signature, bool) {
 			s.Inbound = n
 		case "out":
 			s.Outbound = n
+		case "early":
+			s.EarlyBlocking = value == "1"
 		case "tune":
 			s.Tuning = value == "1"
 		}

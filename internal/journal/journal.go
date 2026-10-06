@@ -34,6 +34,8 @@ type Entry struct {
 	Revision string    `json:"rev,omitempty"`
 	Result   string    `json:"result"`
 	Error    string    `json:"error,omitempty"`
+	SHA256   string    `json:"sha256,omitempty"`
+	Stages   []Stage   `json:"stages,omitempty"`
 	Diff     string    `json:"diff,omitempty"`
 }
 
@@ -135,4 +137,11 @@ func decode(r io.Reader, site string) ([]Entry, error) {
 		return nil, fmt.Errorf("read journal: %w", err)
 	}
 	return entries, nil
+}
+
+// Stage describes the evidence available for a publication step.
+type Stage struct {
+	Name   string `json:"name"`
+	Result string `json:"result"`
+	Detail string `json:"detail,omitempty"`
 }

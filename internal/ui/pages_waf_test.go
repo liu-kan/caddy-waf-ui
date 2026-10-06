@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -139,6 +141,65 @@ func TestAnalysisAndOverviewSummaries(t *testing.T) {
 	}
 }
 
+func TestOverviewShowsRecentStoredEvents(t *testing.T) {
+	setupUIEnv(t)
+	byPath := setupWAFRuntime(t)
+	overview := getPage(t, "/?tab=overview")
+	if !strings.Contains(overview, "Recent WAF events") {
+		t.Fatal("overview misses the recent event list")
+	}
+	var newest *events.Event
+	for _, e := range byPath {
+		if newest == nil || e.TS.After(newest.TS) {
+			newest = e
+		}
+	}
+	if !strings.Contains(overview, "tab=event&amp;tx="+newest.TxID) {
+		t.Fatalf("overview does not link the newest event %s", newest.TxID)
+	}
+	if strings.Contains(overview, "No Coraza audit entries available yet.") {
+		t.Fatal("overview reports no entries while the store holds events")
+	}
+}
+
+func TestEventDetailExplainsInterruptionWithoutDecision(t *testing.T) {
+	setupUIEnv(t)
+	byPath := setupWAFRuntime(t)
+	// An On-mode upload above SecRequestBodyLimit: Coraza answers 413 before
+	// any decision rule runs, and the record carries no rule message.
+	raw := `{"transaction":{"unix_timestamp":` + strconv.FormatInt(time.Now().UnixNano(), 10) + `,"id":"bodylimit-1","client_ip":"192.0.2.10",` +
+		`"server_id":"example.com","request":{"method":"POST","uri":"/upload"},"producer":{"rule_engine":"On","rulesets":["OWASP_CRS/4.25.0"]},"is_interrupted":true}}`
+	e, err := (&events.Normalizer{Dict: crs.Default()}).Normalize([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eventStore().Append(e, events.SourceLocal); err != nil {
+		t.Fatal(err)
+	}
+	const hint = "without a threshold decision or direct-block rule"
+	if body := getPage(t, "/?tab=event&tx=bodylimit-1"); !strings.Contains(body, hint) {
+		t.Fatal("an interruption without a decision rule must be explained")
+	}
+	decided := byPath["/.git/config|blocked"]
+	if body := getPage(t, "/?tab=event&tx="+decided.TxID); strings.Contains(body, hint) {
+		t.Fatal("a threshold decision needs no extra explanation")
+	}
+	// A custom rule unknown to the dictionary most likely made the block.
+	custom := `{"transaction":{"unix_timestamp":` + strconv.FormatInt(time.Now().UnixNano(), 10) + `,"id":"custom-deny-1","client_ip":"192.0.2.11",` +
+		`"server_id":"example.com","request":{"method":"GET","uri":"/admin"},"producer":{"rule_engine":"On","rulesets":["OWASP_CRS/4.25.0"]},"is_interrupted":true},` +
+		`"messages":[{"actionset":"custom","data":{"id":1000001,"msg":"Admin area is internal","severity":2}}]}`
+	ce, err := (&events.Normalizer{Dict: crs.Default()}).Normalize([]byte(custom))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eventStore().Append(ce, events.SourceLocal); err != nil {
+		t.Fatal(err)
+	}
+	if body := getPage(t, "/?tab=event&tx=custom-deny-1"); strings.Contains(body, hint) {
+		t.Fatal("an unknown custom rule explains the interruption")
+	}
+}
+
 func seedManagedSite(t *testing.T) {
 	t.Helper()
 	if err := service.ApplyMode(service.Actor{RemoteIP: "192.0.2.1"}, "example.com", domain.ModeDetectionOnly); err != nil {
@@ -161,7 +222,7 @@ func TestPolicyPreviewValidationAndApply(t *testing.T) {
 		"tuning": {"on"}, "allowed_methods": {"GET POST PUT"}, "disabled_groups": {"933"}, "action": {"preview"}}
 	rec = formPost(t, mux, "/sites/example.com/policy", form)
 	body := rec.Body.String()
-	if rec.Code != http.StatusOK || !strings.Contains(body, "Estimated impact over the last 14 days") ||
+	if rec.Code != http.StatusOK || !strings.Contains(body, "Estimated impact on recorded events") ||
 		!strings.Contains(body, "blocking_paranoia_level=2") || !strings.Contains(body, "SecRuleRemoveById 933000-933999") {
 		t.Fatalf("preview: %d %s", rec.Code, body)
 	}
@@ -170,6 +231,11 @@ func TestPolicyPreviewValidationAndApply(t *testing.T) {
 		t.Fatal("a preview must not change the stored policy")
 	}
 
+	draftMatch := regexp.MustCompile(`name="draft_id" value="([^"]+)"`).FindStringSubmatch(body)
+	if len(draftMatch) != 2 {
+		t.Fatal("preview did not return a draft token")
+	}
+	form.Set("draft_id", draftMatch[1])
 	form.Set("action", "apply")
 	form.Set("reason", "raise to PL2 after a week of detection data")
 	rec = formPost(t, mux, "/sites/example.com/policy", form)
@@ -208,6 +274,11 @@ func TestExclusionPreviewApplyAndRemove(t *testing.T) {
 	if bad.Code != http.StatusOK || !strings.Contains(bad.Body.String(), "cannot be excluded") {
 		t.Fatal("decision rules must be refused with an explanation")
 	}
+	draftMatch := regexp.MustCompile(`name="draft_id" value="([^"]+)"`).FindStringSubmatch(body)
+	if len(draftMatch) != 2 {
+		t.Fatal("preview did not return a draft token")
+	}
+	form.Set("draft_id", draftMatch[1])
 	form.Set("action", "apply")
 	form.Set("reason", "confirmed false positive")
 	if rec := formPost(t, mux, "/sites/example.com/exclusions", form); !strings.Contains(rec.Header().Get("Location"), "flash=success") {
@@ -290,8 +361,10 @@ func TestWAFAPI(t *testing.T) {
 	if rec := apiCall(t, api, http.MethodGet, "/api/rules?q=libinjection&kind=detection", ""); !strings.Contains(rec.Body.String(), "942100") {
 		t.Fatal("rule search")
 	}
-	if rec := apiCall(t, api, http.MethodGet, "/api/analysis?range=24h", ""); !strings.Contains(rec.Body.String(), `"Attackers"`) {
-		t.Fatalf("analysis: %s", rec.Body.String())
+	if rec := apiCall(t, api, http.MethodGet, "/api/analysis?range=24h", ""); !strings.Contains(rec.Body.String(), `"attackers":[`) ||
+		!strings.Contains(rec.Body.String(), `"fp_candidates"`) || !strings.Contains(rec.Body.String(), `"would_block":`) ||
+		strings.Contains(rec.Body.String(), `"Attackers"`) {
+		t.Fatalf("analysis must use the snake_case API names: %s", rec.Body.String())
 	}
 	rec = apiCall(t, api, http.MethodPost, "/api/sites/example.com/impact", `{"exclusions":[{"type":"id","value":"930130","path":"/.git/","path_match":"prefix"}]}`)
 	// Both /.git/config records (DetectionOnly and On) come from the same
@@ -325,5 +398,32 @@ func TestWAFAPI(t *testing.T) {
 	}
 	if rec := apiCall(t, api, http.MethodPost, "/api/loki/backfill", `{}`); rec.Code != http.StatusServiceUnavailable {
 		t.Fatal("backfill without Loki")
+	}
+}
+
+func TestEventDetailShowsLocalMatchContextOnDemand(t *testing.T) {
+	setupUIEnv(t)
+	evs := setupWAFRuntime(t)
+	raw, err := os.ReadFile(filepath.Join("..", "events", "testdata", "coraza-3.8.0-audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	audit := filepath.Join(t.TempDir(), "coraza-audit.log")
+	if err := os.WriteFile(audit, raw, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CADDY_UI_AUDIT_LOG", audit)
+	git := evs["/.git/config|blocked"]
+	page := getPage(t, "/?tab=event&tx="+git.TxID)
+	if !strings.Contains(page, "Local match context") || !strings.Contains(page, "Show matched values") || strings.Contains(page, "<code>.git/</code>") {
+		t.Fatal("matched values must only be read on demand")
+	}
+	page = getPage(t, "/?tab=event&tx="+git.TxID+"&raw=1")
+	if !strings.Contains(page, "<code>.git/</code>") || !strings.Contains(page, "REQUEST_FILENAME") {
+		t.Fatal("raw=1 must show the local matched fragment")
+	}
+	t.Setenv("CADDY_UI_AUDIT_LOG", filepath.Join(t.TempDir(), "rotated-away.log"))
+	if page := getPage(t, "/?tab=event&tx="+git.TxID+"&raw=1"); !strings.Contains(page, "raw audit record not available locally") {
+		t.Fatal("a missing raw record must be explained")
 	}
 }

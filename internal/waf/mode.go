@@ -26,7 +26,8 @@ type Options struct {
 	AuditParts         string
 	// Exclusions is the raw content of a canonical exclusions file, used by
 	// the GenerateSnippetWithOptions compatibility entry point.
-	Exclusions string
+	VerifyProbe bool
+	Exclusions  string
 }
 
 func DefaultOptions() Options {
@@ -81,15 +82,17 @@ coraza_waf {
 {{ end }}    directives ` + "`" + `
         # waf-config-revision: {{ .Revision }}
         SecComponentSignature "{{ .Signature }}"
+{{ if and .Options.VerifyProbe (ne .Mode "Off") }}        SecRule REQUEST_HEADERS:X-Caddy-WAF-Probe "@streq {{ .Revision }}" "id:9001200,phase:1,{{ if eq .Mode "On" }}deny,status:418{{ else }}pass{{ end }},t:none,log,auditlog,msg:'WAF UI origin probe',ctl:auditEngine=On"
+{{ end }}
         Include {{ .Options.CorazaConfig }}
         Include {{ .Options.CRSSetup }}
+        # ui-runtime-exclusions-begin
+{{ range .Runtime }}        {{ . }}
+{{ end }}        # ui-runtime-exclusions-end
 {{ if .Options.BeforeFile }}        Include {{ .Options.BeforeFile }}
 {{ end }}        # ui-policy-begin
 {{ range .PolicyPre }}        {{ . }}
 {{ end }}        # ui-policy-end
-        # ui-runtime-exclusions-begin
-{{ range .Runtime }}        {{ . }}
-{{ end }}        # ui-runtime-exclusions-end
         Include {{ .Options.CRSRules }}
 {{ if .Options.AfterFile }}        Include {{ .Options.AfterFile }}
 {{ end }}        # ui-config-exclusions-begin
@@ -175,7 +178,7 @@ func Generate(site string, cfg Config, auditPath string, opts Options) (Generate
 		return Generated{}, err
 	}
 	sig := Signature{Site: site, Revision: revision, Mode: string(cfg.Mode), BlockingPL: policy.BlockingPL,
-		DetectionPL: policy.DetectionPL, Inbound: policy.InboundThreshold, Outbound: policy.OutboundThreshold, Tuning: policy.Tuning}
+		DetectionPL: policy.DetectionPL, Inbound: policy.InboundThreshold, Outbound: policy.OutboundThreshold, Tuning: policy.Tuning, EarlyBlocking: policy.EarlyBlocking}
 	pre, post := policy.render()
 	data := templateData{
 		Header:     domain.Header(site, cfg.Mode, time.Now()),

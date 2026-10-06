@@ -4,6 +4,8 @@ A self-hosted management sidecar for [caddy-with-auth](https://github.com/liu-ka
 
 This fork is based on [Developmi/caddy-waf-ui](https://github.com/Developmi/caddy-waf-ui), under its original MIT license. It retains bearer/session authentication, CSRF protection, rate limiting, per-site mode controls, exclusions, IP lists, audit log search and typed rollback.
 
+Chinese documentation (中文文档): [documentation/zh/README.md](documentation/zh/README.md) covers deployment, configuration, the backend image, Grafana Cloud, every page and its REST API.
+
 ## Start the example
 
 ```sh
@@ -45,7 +47,7 @@ Operator-owned custom rules live in `waf-custom/before.conf` and `waf-custom/aft
 | `CADDY_UI_WAF_BEFORE_FILE` | `waf-custom/before.conf` mount in Compose | Optional pre-CRS custom rules |
 | `CADDY_UI_WAF_AFTER_FILE` | `waf-custom/after.conf` mount in Compose | Optional post-CRS custom rules |
 | `CADDY_UI_RESPONSE_BODY_ACCESS` | `Off` | Avoid response buffering for streaming APIs |
-| `CADDY_UI_AUDIT_LOG_PARTS` | `AHKZ` | Omit request/response headers and bodies by default |
+| `CADDY_UI_AUDIT_LOG_PARTS` | `AHKZ` | Method, URI and rule matches; `ABHKZ` also keeps request headers locally. No request/response bodies |
 | `CADDY_UI_AUDIT_LOG` | `/data/logs/coraza-audit.log` | Same audit path inside Caddy and UI |
 | `CADDY_UI_MANAGED_DIR` | `/ui-managed` | UI view of the overlay volume |
 | `CADDY_UI_INCLUDE_DIR` | `/etc/caddy/ui-managed` | Caddy view, used for bootstrap import verification |
@@ -58,21 +60,35 @@ Empty custom-file variables disable those optional includes in standalone runs. 
 
 ## Updates and rollback
 
-Exclusions are stored in `exclusions-{slug}.conf` as the canonical editable list, then compiled into the generated WAF directives. Parameter-conditioned runtime exclusions are placed before CRS rules, and configure-time rule removals after CRS loading. A parameter-conditioned exclusion currently disables the whole selected rule when that parameter exists; it is not a per-target `ruleRemoveTarget` exception. No URI condition is offered by this UI.
+Exclusions are stored in `exclusions-{slug}.conf` as the canonical editable list, then compiled into the generated WAF directives. Runtime exclusions run before custom/CRS rules. Parameter exceptions use `ctl:ruleRemoveTargetById` (or by tag) for the selected ARGS target; exact/prefix path scopes are available. Configure-time removals follow rule loading. Optional UTC expiry is enforced per request by Coraza, without a scheduled reload.
 
 Every regeneration refreshes a random revision comment **inside** `directives`. This invalidates Coraza v2.6.1's WAF pool even when only an external custom include changed or the operator reapplies the same mode. Header timestamps outside the block are insufficient. After editing an operator-owned custom file, reapply the site's current mode in the UI.
 
-Snapshots include nanoseconds and use exclusive creation, so rapid updates and rollback cannot overwrite the selected snapshot. Legacy second-resolution names remain supported. Changes serialize the full backup/write/reload/restore transaction. Exclusion changes and exclusion rollback also update the WAF overlay. A rejected reload restores both files. If `/load` succeeds but its verification fails, the service reloads the restored files to recover live state. WAF rollback restores its own baseline/mode and retains the current independent exclusion list; use an exclusions snapshot to roll back that list. Legacy WAF snapshots without the new managed regions retain their original bytes; migrate them by reapplying a mode before relying on the new contract.
+Snapshots include nanoseconds and use exclusive creation, so rapid updates and rollback cannot overwrite the selected snapshot. Legacy second-resolution names remain supported. Changes serialize the full backup/write/reload/restore transaction. Exclusion changes and exclusion rollback also update the WAF overlay. A rejected reload restores both files. If `/load` succeeds but its verification fails, the service reloads the restored files to recover live state. WAF rollback restores the snapshot's mode and policy, then regenerates the overlay with the current baseline and the current independent exclusion list; use an exclusions snapshot to roll back that list. Legacy snapshots without the policy line restore their mode with the default CRS policy.
 
 ## Cloudflare and audit logs
 
 IP allow/deny rules use Caddy's `client_ip` matcher. Retain your existing trusted proxy/strict-header configuration from `caddy-with-auth`. Without a trusted proxy match, `client_ip` falls back to the direct peer; the UI does not trust arbitrary forwarding headers. Old `remote_ip` overlay files remain readable in the editor and become `client_ip` rules when saved.
 
-Both containers use UID/GID 65532. UI overlays and new audit files are 0640, with 0750 directories. The UI receives only the audit volume read-only, not the certificate-bearing `/data` volume. Existing audit files are not made world-readable by the initializer.
+Both containers use UID/GID 65532. UI overlays and new audit files are 0640, with 0750 directories. The UI receives only the audit directory read-write for safe rename/reopen rotation, not the certificate-bearing `/data` volume. Existing audit files are not made world-readable by the initializer.
 
-`BLOCKED` reflects Coraza's actual interruption flag rather than a rule's configured `deny` action; DetectionOnly matches remain `DETECTED`. A standalone `allow` interruption is not a denial. Legacy logs without the flag still use their action fields. The viewer reads Coraza JSON, not Caddy access/error JSON, and shows only the last 2 MiB of recent records. It is not a replacement for historical Grafana/Loki analysis.
+`BLOCKED` reflects Coraza's actual interruption flag rather than a configured `deny` action. The Events page uses durable normalized history; the legacy Logs page remains a recent raw-audit diagnostic view. The Rules page accepts `930130,949110` or a copied `"rule_ids_csv":"930130,949110"` field, and shows each rule's meaning, CRS version, source, score role and curated Chinese notes. In an event, detection rules and the final threshold decision appear together: 930130 detects a restricted-file request; 949110 evaluates the accumulated inbound score and is not offered as an exclusion.
 
-The default `AHKZ` omits the request section, so the URI column can be empty. To retain request URI and headers, opt into `ABHKZ` and consider the resulting credential/header exposure. Rule messages and matched fragments may contain sensitive data even with `AHKZ`. Restrict access and configure retention/rotation before shipping logs externally.
+## Cloud storage with local viewing
+
+[LOCAL-CLOUD.md](LOCAL-CLOUD.md) documents the complete deployment and review workflow. Optional Alloy ships redacted WAF events, access metadata, runtime metadata and configuration-change metadata to Grafana Cloud Loki. The local UI queries Loki directly, displays rule explanations and retrospective analysis, records operator decisions and previews policy changes. No local Loki, Grafana, SQL database or Redis is required.
+
+```sh
+# Fill the separate logs:write and logs:read credentials described in LOCAL-CLOUD.md.
+docker compose --profile cloud config --quiet
+docker compose --profile cloud up -d --build
+```
+
+Recent views use local retained files. When Loki is configured, event and analysis ranges longer than 24 hours default to cloud queries; the Storage selector lets you choose either source. Cloud history is paginated rather than copied wholesale into memory. Impact previews have their own history selector. Analysis and impact are bounded estimates over the newest 2,000 audited matches, never total traffic counts or a raw-request replay.
+
+The default `AHKZ` audit parts keep method, URI and rule matches in the raw local file, without request headers or bodies; `ABHKZ` additionally keeps headers for local diagnostics. Alloy never ships the raw file. Normalized records omit matched values by default, and always hide known credential fields and unknown match data. `CADDY_UI_MATCHED_VALUES=true` is an explicit diagnostic opt-in. Inspect path names, parameter names and custom rule messages for your application's own privacy requirements.
+
+Raw audit rotation defaults to 32 MiB: rename, reopen each managed WAF writer through a revision change, and continue ingesting the archive. Archives have a 48-hour late-write grace period and are removed only after ingestion reaches EOF. `CADDY_UI_AUDIT_ROTATE_MB=0` disables automatic rotation. This is bounded retention with recoverable cursors, not a guarantee of lossless transport during an indefinitely long outage. Monitor disk space and the pipeline status.
 
 ## Development and verification
 
@@ -95,4 +111,4 @@ To run the opt-in real-Caddy request test with an existing native binary contain
 CADDY_TEST_BINARY=/absolute/path/to/caddy go test ./tests/integration -run TestRealCaddyWAFUpdatesAndStreaming -v
 ```
 
-It covers actual DetectionOnly/On/Off behavior, exclusion update/rollback, external include refresh at the same mode, trusted visitor IP rejection, SSE event timing, multipart upload, callback paths and WebSocket upgrade/frame forwarding.
+It covers actual DetectionOnly/On/Off behavior, exclusion expiry without reload, exclusion update/rollback, external include refresh at the same mode, trusted visitor IP rejection, SSE event timing, multipart upload, callback paths and WebSocket upgrade/frame forwarding.

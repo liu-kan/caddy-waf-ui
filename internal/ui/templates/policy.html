@@ -28,6 +28,8 @@
   <input type="hidden" name="csrf" value="{{ .CSRF }}">
   <input type="hidden" name="domain" value="{{ .CurrentSite.Domain }}">
   <input type="hidden" name="tab" value="policy">
+  <label>Impact history<select name="source"><option value="local">Local retained events</option>{{ if .LokiReady }}<option value="loki" {{ if eq .HistoryBackend "loki" }}selected{{ end }}>Grafana Cloud Loki</option>{{ end }}</select></label>
+ {{ if .PolicyPreview }}<input type="hidden" name="draft_id" value="{{ .PolicyPreview.DraftID }}">{{ end }}
   <div class="grid">
     <div>
       <h2 class="card-title card-title-spaced">Paranoia level</h2>
@@ -53,7 +55,7 @@
       </label>
       <label><input type="checkbox" name="early_blocking" {{ if .PolicyForm.EarlyBlocking }}checked{{ end }}> Early blocking (decide after phases 1 and 3 too)</label>
       <label><input type="checkbox" name="tuning" {{ if .PolicyForm.Tuning }}checked{{ end }}> Tuning mode: also record requests with any score below the threshold</label>
-      <small>Without tuning mode Coraza only records blocked (or would-be-blocked) requests, so lowering a threshold or raising a level cannot be estimated. It increases the audit volume.</small>
+      <small>Without tuning mode Coraza records only blocked (or would-be-blocked) requests and 4xx/5xx responses, so the effect of lowering a threshold or raising a level on other requests cannot be estimated. It increases the audit volume.</small>
     </div>
   </div>
   <div class="grid">
@@ -65,7 +67,7 @@
       <label>Allowed request content types (empty = CRS default)
         <input type="text" name="allowed_content_types" value="{{ .PolicyForm.ContentTypes }}" placeholder="application/json multipart/form-data application/x-www-form-urlencoded" class="u-mono">
       </label>
-      <label>Largest request body inspected, bytes (empty = baseline, 13107200)
+      <label>Request body limit, bytes: larger bodies are rejected with HTTP 413 in On mode (empty = baseline, 13107200)
         <input type="number" name="request_body_limit" min="0" value="{{ .PolicyForm.BodyLimit }}" class="u-mono">
       </label>
     </div>
@@ -82,7 +84,7 @@
   </label>
   <div class="u-flex u-gap">
     <button type="submit" name="action" value="preview" class="secondary">Preview diff and impact</button>
-    <button type="submit" name="action" value="apply" class="primary" data-require-reason>Apply policy</button>
+    <button type="submit" name="action" value="apply" class="primary" data-require-reason {{ if not .PolicyPreview }}disabled{{ end }}>Apply reviewed policy</button>
   </div>
 </form>
 

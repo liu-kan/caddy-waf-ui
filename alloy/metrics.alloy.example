@@ -1,0 +1,23 @@
+// Optional: append to config.alloy only when a metrics endpoint is set.
+// Drop per-rule counters by default to preserve the free-tier series budget.
+prometheus.scrape "waf_ui" {
+  targets = [{__address__ = "caddy-waf-ui:8080", job = "caddy-waf-ui"}]
+  scrape_interval = "30s"
+  bearer_token = sys.env("CADDY_UI_METRICS_TOKEN")
+  forward_to = [prometheus.relabel.budget.receiver]
+}
+prometheus.relabel "budget" {
+  rule { source_labels = ["__name__"]
+    regex = "waf_rule_hits_total"
+    action = "drop" }
+  forward_to = [prometheus.remote_write.cloud.receiver]
+}
+prometheus.remote_write "cloud" {
+  endpoint {
+    url = sys.env("GRAFANA_CLOUD_PROMETHEUS_URL")
+    basic_auth {
+      username = sys.env("GRAFANA_CLOUD_PROMETHEUS_USER")
+      password = sys.env("GRAFANA_CLOUD_METRICS_WRITE_TOKEN")
+    }
+  }
+}

@@ -150,3 +150,18 @@ func (r *Rollups) Range(from, to time.Time, site string) []RollupRow {
 	})
 	return out
 }
+
+// ResetDays allows startup to rebuild retained counters from durable events,
+// recovering a crash between appending an event and flushing its rollup.
+func (r *Rollups) ResetDays(days []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, day := range days {
+		month := day[:7]
+		if r.months[month] == nil {
+			r.months[month] = map[string]map[string]int64{}
+		}
+		r.months[month][day] = map[string]int64{}
+		r.dirty[month] = true
+	}
+}

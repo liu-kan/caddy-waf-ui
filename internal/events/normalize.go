@@ -55,12 +55,23 @@ type auditRecord struct {
 }
 
 // ErrNotAuditRecord marks JSON that is not a Coraza transaction.
+var ErrProbeRecord = errors.New("origin probe record (excluded from user events)")
+
+// ErrNoRuleMatch marks an audit record without any rule match. Coraza's
+// RelevantOnly engine also logs every response whose status matches
+// SecAuditLogRelevantStatus (4xx and 5xx in the recommended baseline), such
+// as an upstream 404 or 401: these are not WAF events.
+var ErrNoRuleMatch = errors.New("audit record without rule matches (not a WAF event)")
+
 var ErrNotAuditRecord = errors.New("not a Coraza audit record (no transaction.id)")
 
 // Normalizer converts audit records to events.
 type Normalizer struct {
 	Dict *crs.Dictionary
 	Node string
+	// AllowMatchedValues is opt-in. Credentials and unrecognized logdata are always hidden.
+	AllowMatchedValues bool
+
 	// SiteForHost maps a Host to a managed site when a record carries no
 	// UI signature (overlays generated before signatures existed).
 	SiteForHost func(host string) string
@@ -116,6 +127,11 @@ func (n *Normalizer) normalize(rec *auditRecord) (*Event, error) {
 	if tx.Response != nil {
 		e.Status = tx.Response.Status
 	}
+	for _, m := range rec.Messages {
+		if m.Data != nil && m.Data.ID == 9001200 {
+			return nil, ErrProbeRecord
+		}
+	}
 	var rulesets []string
 	if tx.Producer != nil {
 		e.Engine = tx.Producer.RuleEngine
@@ -127,6 +143,7 @@ func (n *Normalizer) normalize(rec *auditRecord) (*Event, error) {
 	}
 	if sig, ok := waf.FindSignature(rulesets, actionsets...); ok {
 		e.Site, e.Mode, e.Revision = sig.Site, sig.Mode, sig.Revision
+		e.EarlyBlocking = sig.EarlyBlocking
 		e.BlockingPL, e.DetectionPL, e.ThrIn, e.ThrOut, e.Tuning = sig.BlockingPL, sig.DetectionPL, sig.Inbound, sig.Outbound, sig.Tuning
 	}
 	if e.Site == "" {
@@ -159,7 +176,7 @@ func (n *Normalizer) normalize(rec *auditRecord) (*Event, error) {
 			directBlock = true
 		}
 		if h.Kind == crs.KindDecision {
-			if s := totalScore.FindStringSubmatch(h.Msg); s != nil {
+			if s := totalScore.FindStringSubmatch(m.Data.Msg); s != nil {
 				score, _ := strconv.Atoi(s[1])
 				if h.Dir == crs.DirOutbound {
 					e.ReportedOut = score
@@ -180,8 +197,14 @@ func (n *Normalizer) normalize(rec *auditRecord) (*Event, error) {
 	}
 	e.computeScores()
 	e.Interrupted = interrupted(tx.IsInterrupted, tx.Action)
+	// An interruption without rule messages is still a block: the request
+	// body limit (HTTP 413) or a nolog rule.
+	if len(ids) == 0 && !e.Interrupted {
+		return nil, ErrNoRuleMatch
+	}
 	e.Action = e.classify(directBlock)
 	if len(e.Hits) > maxHits {
+		e.HitsTruncated = true
 		e.Hits = e.Hits[:maxHits]
 	}
 	if e.Hits == nil {
@@ -200,8 +223,11 @@ func (n *Normalizer) hit(id int, msg, logdata string, severity json.RawMessage, 
 		}
 	}
 	h.Var, h.Data, h.Value = splitLogdata(logdata)
-	if h.Var != "" && sensitiveVar.MatchString(h.Var) {
+	if h.Var == "" || sensitiveVar.MatchString(h.Var) || !n.AllowMatchedValues {
 		h.Data, h.Value = redacted, redacted
+	}
+	if !n.AllowMatchedValues {
+		h.Value = redacted
 	}
 	rule, ok := n.Dict.Lookup(id)
 	if !ok && raw != "" {
@@ -210,6 +236,9 @@ func (n *Normalizer) hit(id int, msg, logdata string, severity json.RawMessage, 
 		}
 	}
 	if ok {
+		if rule.Msg != "" {
+			h.Msg = rule.Msg
+		}
 		h.Kind, h.Dir, h.Category = rule.Kind, rule.Dir, rule.Category
 		if rule.Kind == crs.KindDetection {
 			h.Score = rule.Score
@@ -223,6 +252,7 @@ func (n *Normalizer) hit(id int, msg, logdata string, severity json.RawMessage, 
 	}
 	if h.Kind == "" {
 		h.Kind = "unknown"
+		h.Msg = "Custom rule match (message hidden)"
 	}
 	return h
 }
@@ -286,7 +316,7 @@ func disruptiveLog(line string) bool {
 
 func interrupted(flag *bool, legacyAction string) bool {
 	if flag != nil {
-		return *flag
+		return *flag && !strings.EqualFold(legacyAction, "allow")
 	}
 	switch strings.ToLower(strings.TrimSpace(legacyAction)) {
 	case "deny", "drop", "redirect":

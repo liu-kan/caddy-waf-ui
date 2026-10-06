@@ -67,9 +67,9 @@
   </div>
 
   <div class="metric-card">
-    <h2>Coraza Detections</h2>
-    <div class="value">{{ len .Logs }}</div>
-    <div class="u-text-sm u-text-muted">From the Coraza audit log</div>
+    <h2>WAF Events (24h)</h2>
+    <div class="value">{{ if .Report }}{{ .Report.Events }}{{ else }}0{{ end }}</div>
+    <div class="u-text-sm u-text-muted">{{ if .Report }}{{ .Report.Blocked }} blocked · {{ .Report.WouldBlock }} would block{{ else }}From the stored WAF events{{ end }}</div>
   </div>
 </div>
 
@@ -156,33 +156,35 @@
   </div>
 </div>
 
-<!-- Recent Coraza Audit Entries (lectura al render, no hay stream) -->
+<!-- Recent WAF events (event store, read at render) -->
 <div class="card-box">
   <div class="card-box-header">
     <div>
-      <h2 class="card-title">Recent Audit Entries</h2>
-      <small class="u-text-faint">From <code>/data/logs/coraza-audit.log</code></small>
+      <h2 class="card-title">Recent WAF events</h2>
+      <small class="u-text-faint">Newest stored events of the last 24 hours</small>
     </div>
-    <a href="?tab=logs" class="secondary outline btn-compact">Open Full Log →</a>
+    <div class="u-flex u-gap">
+      <a href="?tab=events" class="secondary outline btn-compact">All events →</a>
+      <a href="?tab=logs" class="secondary outline btn-compact">Raw audit log →</a>
+    </div>
   </div>
 
   <div class="card-box-body u-flex u-col u-gap">
-    {{ if .Logs }}
-      {{ range slice .Logs 0 4 }}
-        <div class="log-entry {{ if eq .Action "BLOCKED" }}log-entry--blocked{{ else }}log-entry--detected{{ end }}">
-          <div>
-            <span class="{{ if eq .Action "BLOCKED" }}badge-deny{{ else }}badge-detect{{ end }}">{{ .Action }}</span>
-            <strong class="log-entry-rule">ID: {{ .RuleID }}</strong>
-            <span class="log-entry-uri">{{ .URI }}</span>
-          </div>
-          <div class="u-text-faint">
-            Client: {{ .Client }}
-          </div>
+    {{ if .HistoryError }}<p role="alert" class="u-text-danger">{{ .HistoryError }}</p>{{ end }}
+    {{ range .EventRows }}
+      <div class="log-entry {{ if eq .E.Action "blocked" }}log-entry--blocked{{ else }}log-entry--detected{{ end }}">
+        <div>
+          <span class="{{ .ActionClass }}">{{ .ActionLabel }}</span>
+          <a href="/?tab=event&amp;tx={{ .E.TxID }}&amp;node={{ .E.Node }}" class="log-entry-uri u-mono">{{ .E.Method }} {{ .E.Path }}</a>
+          {{ range .Rules }}<a href="/?tab=rules&amp;id={{ .ID }}" class="rule-pill rule-pill--{{ .Kind }}" title="{{ .Msg }}">{{ .ID }}</a> {{ end }}
         </div>
-      {{ end }}
+        <div class="u-text-faint">
+          {{ date .E.TS "2006-01-02 15:04:05" }} UTC · {{ .E.Site }} · client {{ .E.ClientIP }}
+        </div>
+      </div>
     {{ else }}
       <p class="card-box-empty">
-        No Coraza audit entries available yet.
+        {{ if .StoreReady }}No WAF events in the last 24 hours.{{ else }}The event store is not running; the raw audit log tab still shows the latest records.{{ end }}
       </p>
     {{ end }}
   </div>

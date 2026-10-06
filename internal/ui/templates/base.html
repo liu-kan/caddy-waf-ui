@@ -80,12 +80,12 @@
 {{define "pipeline-status"}}
 <div class="status-strip">
   {{ if .IngestReady }}
-    <span>Audit log <code>{{ .Ingest.Path }}</code>: read {{ .Ingest.Offset }} of {{ .Ingest.Size }} bytes{{ if not .Ingest.LastPoll.IsZero }}, checked {{ date .Ingest.LastPoll "15:04:05" }}{{ end }}{{ if .Ingest.Truncations }}, truncated {{ .Ingest.Truncations }}×{{ end }}.</span>
+    <span>Audit log <code>{{ .Ingest.Path }}</code>: read {{ .Ingest.Offset }} of {{ .Ingest.Size }} bytes{{ if not .Ingest.LastPoll.IsZero }}, checked {{ date .Ingest.LastPoll "15:04:05" }}{{ end }}.</span>
     {{ if .Ingest.LastError }}<span class="u-text-danger">Ingestion error: {{ .Ingest.LastError }}</span>{{ end }}
   {{ else }}
     <span class="u-text-amber">Audit log ingestion is not running.</span>
   {{ end }}
-  {{ if .StoreReady }}<span>{{ .StoreStats.Count }} event(s) in memory{{ if not .StoreStats.Oldest.IsZero }} since {{ date .StoreStats.Oldest "2006-01-02 15:04" }}{{ end }}.</span>{{ end }}
+  {{ if .StoreReady }}<span>{{ .StoreStats.Stored }} retained event(s), {{ .StoreStats.Count }} cached in memory{{ if not .StoreStats.Oldest.IsZero }} since {{ date .StoreStats.Oldest "2006-01-02 15:04" }}{{ end }}.</span>{{ end }}
   <span>Rule dictionary: CRS {{ .DictVersion }}.</span>
   {{ if .CRSMismatch }}<span class="u-text-amber">Events report CRS {{ range .CRSSeen }}{{ . }} {{ end }}— rule explanations may be outdated; regenerate the dictionary or set CADDY_UI_CRS_RULES_DIR.</span>{{ end }}
   <span>{{ if .LokiReady }}Loki history: configured.{{ else }}Loki history: not configured.{{ end }}</span>
@@ -96,13 +96,13 @@
 <div class="card-box">
   <div class="card-box-header">
     <div>
-      <h2 class="card-title">Estimated impact over the last 14 days</h2>
-      <small class="u-text-faint">Replays the recorded rule matches of this site's stored events with the change applied</small>
+      <h2 class="card-title">Estimated impact on recorded events</h2>
+      <small class="u-text-faint">Models at most 2,000 newest matching events. Redacted history cannot reproduce every request or rule.</small>
     </div>
   </div>
   <div class="card-box-body">
     <p><strong>{{ .Changed }}</strong> of {{ .Events }} event(s) would change: <strong>{{ .Unblocked }}</strong> no longer blocked, <strong>{{ .NewlyBlocked }}</strong> newly blocked, from {{ .Sources }} source(s).</p>
-    {{ if .AttackSources }}<p class="u-text-danger">{{ .AttackEvents }} of the unblocked event(s) come from {{ .AttackSources }} source(s) flagged as attackers: narrow the scope.</p>{{ end }}
+    {{ if .AttackSources }}<p class="u-text-danger">{{ .AttackEvents }} of the unblocked event(s) come from {{ .AttackSources }} source(s) heuristically flagged as suspected attackers: narrow the scope.</p>{{ end }}
     {{ range .Caveats }}<p class="u-text-amber u-text-sm">⚠ {{ . }}</p>{{ end }}
     {{ if .Samples }}
       <ul class="plain-list">

@@ -10,6 +10,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/developmi/caddy-waf-ui/internal/service"
+	"github.com/developmi/caddy-waf-ui/internal/waf"
 )
 
 // formPost builds a urlencoded POST towards the given mux.
@@ -253,7 +256,11 @@ func TestHandleFormAddExclusionSuccess(t *testing.T) {
 	setupUIEnv(t)
 	mux := NewPagesMux()
 
-	rec := formPost(t, mux, "/sites/example.com/exclusions", url.Values{"ruleId": {"941100"}, "param": {"q"}})
+	draft, err := service.CreateExclusionsDraft("example.com", []waf.Exclusion{{Type: waf.ExcludeByID, Value: "941100", Param: "q"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := formPost(t, mux, "/sites/example.com/exclusions", url.Values{"ruleId": {"941100"}, "param": {"q"}, "draft_id": {draft.DraftID}})
 
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("expected 303, got %d", rec.Code)

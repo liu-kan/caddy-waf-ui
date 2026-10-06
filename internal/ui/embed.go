@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/developmi/caddy-waf-ui/internal/analysis"
+	"github.com/developmi/caddy-waf-ui/internal/crs"
 	"github.com/developmi/caddy-waf-ui/internal/domain"
 	"github.com/developmi/caddy-waf-ui/internal/waf"
 )
@@ -31,6 +32,13 @@ var funcMap = template.FuncMap{
 		default:
 			return fmt.Sprint(value)
 		}
+	},
+	"ruleNote": func(r crs.Rule) string {
+		note, category := crs.Note(r)
+		if note != "" {
+			return note
+		}
+		return category
 	},
 	"slug": domain.DomainSlug,
 	"add":  func(a, b int) int { return a + b },

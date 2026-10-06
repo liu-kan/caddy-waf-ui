@@ -6,6 +6,44 @@ Format: [Keep a Changelog](https://keepachangelog.com/) · Versioning: [Semantic
 
 ---
 
+## [Unreleased] - 1.3.0
+
+### Added
+
+* **caddy-with-auth backend**: Compose runs `liukan/caddy-with-auth` unchanged (shell-free DHI runtime, UID/GID 65532) with the Admin API on an owner-restricted Unix socket, `runtime-init`/`ui-config-init` one-shot services and the embedded CRS (`load_owasp_crs`). `make crs-version` prints the Caddy, Coraza and CRS versions compiled into `CADDY_IMAGE`; `make crs-dict CRS_VERSION=x.y.z` regenerates the rule dictionary reproducibly.
+* **WAF events**: Coraza audit records are normalized, redacted and kept as daily JSONL files (14 days, 128 MiB cap) with restartable cursors, a compact disk-offset index and daily rollups. The event page explains every matched rule with its score contribution, threshold decision, policy at the time and curated Chinese notes; **Show matched values** reads the raw local record on demand without storing or shipping it. Operators can record false-positive/attack decisions locally.
+* **Rule dictionary**: CRS 4.25.0 plus the Coraza baseline and UI-generated rules, searchable by `930130,949110`, a copied `"rule_ids_csv"` field, partial IDs, text or kind, with source links, 14-day statistics and Chinese notes.
+* **Retrospective analysis and impact estimates**: false-positive candidates, likely attackers, new rules, top paths/sources and daily trends over at most 2,000 audited events; impact estimates for exclusions, policies and modes before publishing.
+* **Per-site CRS policy**: blocking/detection paranoia levels, anomaly thresholds, early blocking, tuning mode, allowed methods/content types, request body limit and disabled rule groups.
+* **Scoped exclusions**: rule or tag exclusions narrowed to an ARGS key (or `/regex/`), an exact or prefix path and an optional UTC expiry enforced per request; decision, control and UI rules cannot be excluded.
+* **Reviewed publishing**: browser policy/exclusion changes use a 30-minute draft whose SHA256 and baseline hashes are checked on Apply. Every publish records validate/load/readback/request stages, compensates on failure and keeps `last_good` evidence. Optional per-site origin probes (`CADDY_UI_PROBE_URLS`) verify the live revision and engine mode.
+* **Change journal**: reasons, actors, stages and diffs for every attempted change, shown in Rollback & History and available from `GET /api/changes`.
+* **Raw audit rotation**: rename/reopen at `CADDY_UI_AUDIT_ROTATE_MB` (32 MiB) with 48-hour archives that are deleted only after ingestion.
+* **Grafana Cloud (optional)**: Alloy (`cloud` profile) ships redacted events plus access, runtime and change metadata to Loki with separate read/write tokens; the local UI queries Loki directly, backfills ranges and links to Grafana Explore. `/metrics` is available behind its own token.
+* **REST API**: events, explanations, rules, analysis, policy, impact, changes and Loki backfill endpoints alongside the existing mode, exclusion, IP rule, backup and rollback endpoints.
+* **Chinese documentation**: `documentation/zh/` covers deployment, configuration, the backend image, Grafana Cloud, security, upgrade notes and every page with its REST API.
+
+### Changed
+
+* **Overlay format**: generated WAF overlays carry a revision and `SecComponentSignature` inside `directives`, compile the exclusion list instead of including it and keep the policy in a header line. IP rules use Caddy's `client_ip` matcher.
+* **Rollback**: WAF snapshots restore mode and policy and regenerate the overlay with the current exclusion list; exclusion snapshots roll back the list independently.
+* **Overview**: event counts and recent entries come from the stored WAF events instead of the raw-log tab, which previously left them empty.
+* **UI copy**: the IP Rules page describes the real behavior (connections are aborted; a non-empty allowlist closes every other address), and the Policy page states that bodies above the request body limit get HTTP 413 in On mode.
+
+### Fixed
+
+* **Rule-less audit records**: Coraza's `RelevantOnly` engine also logs 4xx/5xx responses without any rule match; they are no longer ingested as WAF events or shipped to Loki.
+* **Body-limit interruptions**: blocked events without a decision rule (typically HTTP 413) now explain the likely cause.
+* **Rule search**: a partial numeric ID falls back to a substring search instead of an "unknown rule" result.
+* **Analysis API**: `GET /api/analysis` uses snake_case field names like the rest of the API.
+
+### Security
+
+* Matched values are redacted by default (`CADDY_UI_MATCHED_VALUES=true` is an explicit opt-in); credential headers, cookies and credential-like parameters are always hidden. Compose defaults to the `AHKZ` audit parts (no request headers); `ABHKZ` is a local diagnostic opt-in, and raw audit files never leave the host.
+* The UI mounts only the audit directory read-write for rotation, never the certificate-bearing `/data` volume. Alloy mounts neither the Docker nor the Admin socket.
+
+---
+
 ## [1.2.0] - 2026-09-25
 
 ### Added

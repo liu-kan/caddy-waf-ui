@@ -1,0 +1,98 @@
+// Only normalized local events are shipped. imported-*.jsonl, raw audit
+// records, drafts and full configuration diffs never enter this pipeline.
+loki.source.file "waf" {
+  targets = [{__path__ = "/ui-data/events/events-*.jsonl", job = "caddy-waf-ui", kind = "event"}]
+  file_match { enabled = true }
+  forward_to = [loki.process.waf.receiver]
+}
+loki.process "waf" {
+  stage.json {
+    expressions = { ts = "ts", site = "site", action = "action", node = "node", tx = "tx", ip = "ip", rule_ids_csv = "rule_ids_csv", path = "path", rev = "rev" }
+    drop_malformed = true
+  }
+  stage.timestamp { source = "ts"
+    format = "RFC3339Nano"
+    action_on_failure = "skip" }
+  stage.labels { values = {site = "", action = "", node = ""} }
+  stage.structured_metadata { values = {tx = "", ip = "", rule_ids_csv = "", path = "", rev = ""} }
+  stage.label_drop { values = ["filename"] }
+  forward_to = [loki.write.cloud.receiver]
+}
+
+loki.source.file "changes" {
+  targets = [{__path__ = "/ui-data/changes/changes.jsonl", job = "caddy-waf-ui", kind = "change"}]
+  forward_to = [loki.process.changes.receiver]
+}
+loki.process "changes" {
+  stage.json {
+    expressions = {
+      ts = "ts", site = "site", action = "action", result = "result",
+      safe = "{kind: kind, ts: ts, node: node, site: site, action: action, result: result, rev: rev, sha256: sha256, stages: stages[].{name: name, result: result}}",
+    }
+    drop_malformed = true
+  }
+  stage.timestamp { source = "ts"
+    format = "RFC3339Nano"
+    action_on_failure = "skip" }
+  stage.labels { values = {site = "", action = "", result = ""} }
+  stage.output { source = "safe" }
+  stage.label_drop { values = ["filename"] }
+  forward_to = [loki.write.cloud.receiver]
+}
+
+// Access records are reduced to metadata. Headers, URI query values,
+// authentication data and user agents are excluded by this allowlist.
+loki.source.file "access" {
+  targets = [{__path__ = "/caddy-logs/access*.json", job = "caddy-waf-ui", kind = "access"}]
+  file_match { enabled = true }
+  forward_to = [loki.process.access.receiver]
+}
+loki.process "access" {
+  stage.json {
+    expressions = {
+      ts = "ts", site = "request.host",
+      safe = "{kind: 'access', ts: ts, site: request.host, ip: request.client_ip, peer: request.remote_ip, method: request.method, path: request_path, status: status, duration: duration, size: size}",
+    }
+    drop_malformed = true
+  }
+  stage.timestamp { source = "ts"
+    format = "Unix"
+    action_on_failure = "skip" }
+  // Host headers are not indexed labels: wildcard sites can receive arbitrary hosts.
+  stage.output { source = "safe" }
+  stage.label_drop { values = ["filename"] }
+  forward_to = [loki.write.cloud.receiver]
+}
+
+// Runtime messages may embed request fragments. Store their timestamp,
+// level and logger in cloud; full diagnostic text stays in local error.json.
+loki.source.file "runtime" {
+  targets = [{__path__ = "/caddy-logs/error*.json", job = "caddy-waf-ui", kind = "runtime"}]
+  file_match { enabled = true }
+  forward_to = [loki.process.runtime.receiver]
+}
+loki.process "runtime" {
+  stage.json {
+    expressions = { ts = "ts", level = "level", logger = "logger", safe = "{kind: 'runtime', ts: ts, level: level, logger: logger}" }
+    drop_malformed = true
+  }
+  stage.timestamp { source = "ts"
+    format = "Unix"
+    action_on_failure = "skip" }
+  stage.labels { values = {level = ""} }
+  stage.output { source = "safe" }
+  stage.label_drop { values = ["filename"] }
+  forward_to = [loki.write.cloud.receiver]
+}
+
+loki.write "cloud" {
+  endpoint {
+    url = sys.env("GRAFANA_CLOUD_LOKI_URL")
+    basic_auth {
+      username = sys.env("GRAFANA_CLOUD_LOKI_USER")
+      password = sys.env("GRAFANA_CLOUD_LOGS_WRITE_TOKEN")
+    }
+    batch_size = "256KiB"
+    batch_wait = "1s"
+  }
+}

@@ -65,7 +65,7 @@
     <input type="hidden" name="tab" value="rules">
     <div class="filter-field filter-field--grow">
       <label class="visually-hidden" for="rule-q">Search rules</label>
-      <input type="text" id="rule-q" name="q" value="{{ .RuleQuery }}" placeholder="Rule id, message, tag or category (e.g. 930130, sqli, paranoia-level/2)" class="filter-input">
+      <input type="text" id="rule-q" name="q" value="{{ .RuleQuery }}" placeholder="Paste 930130,949110 or the rule_ids_csv JSON field; also search messages and tags" class="filter-input">
     </div>
     <label class="filter-field">
       <span class="visually-hidden">Kind</span>
@@ -93,7 +93,7 @@
             <td>{{ if .PL }}{{ .PL }}{{ end }}</td>
             <td>{{ if .Score }}+{{ .Score }}{{ if eq .Dir "out" }} out{{ end }}{{ end }}</td>
             <td>{{ .Category }}</td>
-            <td class="cell-uri" title="{{ .Msg }}">{{ .Msg }}</td>
+            <td class="cell-uri" title="{{ .Msg }}">{{ .Msg }}{{ if ruleNote . }}<p class="note-zh" lang="zh-CN">{{ ruleNote . }}</p>{{ end }}</td>
           </tr>
         {{ else }}
           <tr><td colspan="6" class="table-empty">No rules match.</td></tr>

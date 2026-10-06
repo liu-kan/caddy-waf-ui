@@ -443,3 +443,18 @@ func TestLoadLogsSuccessPopulatesEntries(t *testing.T) {
 		t.Errorf("with entries there must be at least 1 page, got %d", data.LogPages)
 	}
 }
+
+func TestFlashRedirectPreservesCloudEventContext(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/?tab=event&tx=tx1&node=origin&source=loki&ts=2026-10-05T12%3A00%3A00Z&flash=success", nil)
+	rec := httptest.NewRecorder()
+	HandleIndex(rec, req)
+	loc := rec.Header().Get("Location")
+	for _, field := range []string{"tx=tx1", "node=origin", "source=loki", "ts="} {
+		if !strings.Contains(loc, field) {
+			t.Fatalf("lost %s in %s", field, loc)
+		}
+	}
+	if strings.Contains(loc, "flash=") {
+		t.Fatal("flash not consumed")
+	}
+}

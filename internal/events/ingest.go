@@ -34,14 +34,13 @@ const tailLen = 32
 
 // IngestStatus is shown on the event pages.
 type IngestStatus struct {
-	Path        string
-	Size        int64
-	Offset      int64
-	LastPoll    time.Time
-	LastEvent   time.Time
-	LastError   string
-	Ingested    int64
-	Truncations int64
+	Path      string
+	Size      int64
+	Offset    int64
+	LastPoll  time.Time
+	LastEvent time.Time
+	LastError string
+	Ingested  int64
 }
 
 // Ingester follows the Coraza audit log (JSON lines in Coraza v3; also
@@ -52,9 +51,6 @@ type Ingester struct {
 	StatePath string
 	Store     *Store
 	Norm      *Normalizer
-	// MaxBytes truncates the audit log once every complete record has been
-	// ingested and the file reached this size (0 = never).
-	MaxBytes int64
 	// ChunkSize bounds the bytes read per poll.
 	ChunkSize int64
 
@@ -83,6 +79,9 @@ func (in *Ingester) Run(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
+		if err := in.PollArchives(); err != nil {
+			slog.Warn("audit archive ingestion failed", "error", err)
+		}
 		if err := in.Poll(); err != nil {
 			slog.Warn("audit log ingestion failed", "path", in.Path, "error", err)
 		}
@@ -188,7 +187,7 @@ func (in *Ingester) poll() error {
 	if err := in.saveState(); err != nil {
 		return fmt.Errorf("save ingest state: %w", err)
 	}
-	return in.maybeTruncate(size)
+	return nil
 }
 
 // readTail returns up to tailLen bytes ending at offset.
@@ -285,6 +284,9 @@ func nextRecord(b []byte) int {
 func (in *Ingester) ingest(raw []byte) error {
 	e, err := in.Norm.Normalize(raw)
 	if err != nil {
+		if errors.Is(err, ErrProbeRecord) || errors.Is(err, ErrNoRuleMatch) {
+			return nil
+		}
 		metrics.IngestErrors.Inc("parse")
 		slog.Debug("skipping unparseable audit record", "error", err)
 		return nil
@@ -299,26 +301,4 @@ func (in *Ingester) ingest(raw []byte) error {
 		in.status.LastEvent = e.TS
 	}
 	return nil
-}
-
-// maybeTruncate empties the audit log after it has been fully ingested and
-// reached MaxBytes. Coraza opens it with O_APPEND, so later records are
-// written from offset 0. A record written between the final read and the
-// truncation is lost; the window is the duration of one stat call.
-func (in *Ingester) maybeTruncate(size int64) error {
-	if in.MaxBytes <= 0 || size < in.MaxBytes || in.state.Offset != size {
-		return nil
-	}
-	fi, err := os.Stat(in.Path)
-	if err != nil || fi.Size() != size {
-		return nil // new records arrived: ingest them first, retry next poll
-	}
-	if err := os.Truncate(in.Path, 0); err != nil {
-		metrics.IngestErrors.Inc("truncate")
-		return fmt.Errorf("truncate audit log (is the audit mount read-only?): %w", err)
-	}
-	in.state.Offset = 0
-	in.state.Tail = nil
-	in.status.Truncations++
-	return in.saveState()
 }

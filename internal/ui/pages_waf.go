@@ -17,6 +17,7 @@ import (
 	"github.com/developmi/caddy-waf-ui/internal/crs"
 	"github.com/developmi/caddy-waf-ui/internal/domain"
 	"github.com/developmi/caddy-waf-ui/internal/events"
+	"github.com/developmi/caddy-waf-ui/internal/feedback"
 	"github.com/developmi/caddy-waf-ui/internal/journal"
 	"github.com/developmi/caddy-waf-ui/internal/service"
 	"github.com/developmi/caddy-waf-ui/internal/waf"
@@ -27,14 +28,19 @@ const eventPageSize = 50
 // wafData carries the models of the event, rule, analysis and policy pages.
 // It is embedded in pageData so templates address its fields directly.
 type wafData struct {
-	StoreReady  bool
-	StoreStats  events.Stats
-	IngestReady bool
-	Ingest      events.IngestStatus
-	LokiReady   bool
-	DictVersion string
-	CRSSeen     []string
-	CRSMismatch bool
+	HistoryError   string
+	HistoryWarning string
+	HistoryBackend string
+	HistorySource  string
+	CloudNext      string
+	StoreReady     bool
+	StoreStats     events.Stats
+	IngestReady    bool
+	Ingest         events.IngestStatus
+	LokiReady      bool
+	DictVersion    string
+	CRSSeen        []string
+	CRSMismatch    bool
 
 	EventRows    []eventRow
 	EventTotal   int
@@ -45,12 +51,22 @@ type wafData struct {
 	EventFilter  eventFilter
 	RangeOptions []rangeOption
 
+	Feedback       *feedback.Record
 	Event          *events.Event
 	EventHits      []hitView
 	Suggestions    []analysis.Suggestion
 	CombinedImpact *analysis.Impact
 	ExploreURL     string
 	EventSource    string
+	// NoDecision: Coraza interrupted the request without a decision or
+	// direct-block rule (typically the request body limit, HTTP 413).
+	NoDecision bool
+
+	// LocalPossible: the event was ingested on this node, so its raw audit
+	// record may still exist locally (rotated archives are kept 48 hours).
+	LocalPossible    bool
+	LocalRecord      *events.LocalRecord
+	LocalRecordError string
 
 	RuleList   []crs.Rule
 	RuleQuery  string
@@ -81,7 +97,7 @@ type wafData struct {
 }
 
 type eventFilter struct {
-	Site, Action, IP, Rule, Path, Query, Range string
+	Site, Action, IP, Rule, Path, Query, Range, Source string
 }
 
 type trendDay struct {
@@ -115,7 +131,7 @@ type policyForm struct {
 
 // exclusionForm holds the add-exclusion form values.
 type exclusionForm struct {
-	Type, Value, Param, Path, PathMatch, Note, Reason string
+	Type, Value, Param, Path, PathMatch, Note, Reason, Expires string
 }
 
 // exclusionListRow is an active exclusion with its removal key.
@@ -254,8 +270,11 @@ func windowFor(site string, d time.Duration) []*events.Event {
 func buildEventsData(q url.Values, d *wafData) {
 	key, dur := parseRange(q.Get("range"), "24h")
 	d.EventFilter = eventFilter{Site: q.Get("site"), Action: q.Get("action"), IP: q.Get("ip"), Rule: q.Get("rule"),
-		Path: q.Get("path"), Query: q.Get("q"), Range: key}
+		Path: q.Get("path"), Query: q.Get("q"), Range: key, Source: q.Get("source")}
 	d.RangeOptions = rangeOptions(key)
+	if d.EventFilter.Source == "" && dur > 24*time.Hour && currentRuntime() != nil && currentRuntime().Loki.Configured() {
+		d.EventFilter.Source = "loki"
+	}
 	store := eventStore()
 	if store == nil {
 		return
@@ -267,7 +286,33 @@ func buildEventsData(q url.Values, d *wafData) {
 	query := events.Query{From: time.Now().UTC().Add(-dur), Site: d.EventFilter.Site, Action: d.EventFilter.Action,
 		IP: d.EventFilter.IP, RuleID: atoiDefault(d.EventFilter.Rule, 0), PathPrefix: d.EventFilter.Path,
 		Text: d.EventFilter.Query, Limit: eventPageSize, Offset: (page - 1) * eventPageSize}
-	list, total := store.Query(query)
+	var list []*events.Event
+	var total int
+	if d.EventFilter.Source == "loki" {
+		rt := currentRuntime()
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		history, err := rt.Loki.Search(ctx, query, q.Get("cursor"))
+		d.HistorySource = "Grafana Cloud Loki (viewed here)"
+		d.HistoryWarning = history.Warning
+		if err != nil {
+			d.HistoryError = err.Error()
+		} else {
+			list = history.Events
+			total = len(list)
+			d.CloudNext = history.Next
+			if history.More {
+				d.HistoryWarning = "More cloud events are available; use Older to continue"
+			}
+		}
+	} else {
+		var err error
+		list, total, err = store.QueryDisk(query)
+		if err != nil {
+			d.HistoryError = err.Error()
+		}
+		d.HistorySource = "Local retained files (memory cache does not limit history)"
+	}
 	d.EventRows = buildEventRows(list, dictionary())
 	d.EventTotal = total
 	d.EventPage = page
@@ -287,6 +332,21 @@ func buildEventsData(q url.Values, d *wafData) {
 		return "/?" + v.Encode()
 	}
 	d.EventPrev, d.EventNext = link(page-1), link(page+1)
+	if d.EventFilter.Source == "loki" {
+		d.EventPrev = ""
+		d.EventNext = ""
+		if d.CloudNext != "" {
+			v := url.Values{}
+			for k, vals := range q {
+				v[k] = append([]string(nil), vals...)
+			}
+			v.Set("cursor", d.CloudNext)
+			v.Set("tab", "events")
+			v.Del("page")
+			d.EventNext = "/?" + v.Encode()
+		}
+		d.EventPages = 0
+	}
 	d.CRSSeen = crsVersionsSeen(list)
 	for _, v := range d.CRSSeen {
 		if v != d.DictVersion {
@@ -300,14 +360,58 @@ func buildEventDetail(q url.Values, d *wafData) {
 	if store == nil {
 		return
 	}
-	e, ok := store.Get(q.Get("tx"))
+	e, ok := store.GetFor(q.Get("tx"), q.Get("node"))
+	if !ok || q.Get("source") == "loki" {
+		rt := currentRuntime()
+		if rt.Loki.Configured() {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			ts, _ := time.Parse(time.RFC3339Nano, q.Get("ts"))
+			var err error
+			e, err = rt.Loki.Find(ctx, q.Get("tx"), q.Get("node"), ts)
+			if err != nil {
+				d.HistoryError = err.Error()
+				return
+			}
+			ok = true
+		}
+	}
 	if !ok {
 		return
 	}
 	dict := dictionary()
 	d.Event = e
+	d.HistoryBackend = "local"
+	if e.Source == events.SourceLoki {
+		d.HistoryBackend = "loki"
+	}
+	d.Feedback, _ = feedback.Get(e.Node, e.TxID)
 	d.EventHits = buildHitViews(e, dict)
+	d.NoDecision = e.Interrupted && !hasDecision(e)
+	d.LocalPossible = e.Node == "" || e.Node == config.NodeName()
+	if d.LocalPossible && q.Get("raw") == "1" {
+		// Read on demand only: matched values never enter the event files.
+		rec, err := events.FindLocalRecord(config.AuditLogPath(), e.TxID)
+		if err != nil {
+			d.LocalRecordError = err.Error()
+		} else {
+			d.LocalRecord = rec
+		}
+	}
 	window := windowFor(e.Site, 14*24*time.Hour)
+	if e.Source == events.SourceLoki {
+		rt := currentRuntime()
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		h, err := rt.Loki.Search(ctx, events.Query{From: time.Now().Add(-14 * 24 * time.Hour), Site: e.Site, Limit: events.AnalysisLimit}, "")
+		if err == nil {
+			window = h.Events
+		} else {
+			window = nil
+			d.HistoryError = err.Error()
+		}
+		d.HistoryWarning = "Historical estimates use at most 2,000 matching events and may omit unrecorded requests"
+	}
 	profiles := analysis.Profiles(window)
 	d.Suggestions = analysis.Suggest(e, window, profiles, dict)
 	// Rules that each add enough points on their own block the request
@@ -325,12 +429,23 @@ func buildEventDetail(q url.Values, d *wafData) {
 	d.ExploreURL = events.ExploreLink(config.GrafanaExploreURL(), config.GrafanaLokiDatasource(), config.LokiSelector(), e)
 	d.EventSource = "local audit log"
 	if e.Source == events.SourceLoki {
-		d.EventSource = "imported from Loki"
+		d.EventSource = "Grafana Cloud Loki"
 	}
 	if e.CRS != "" && e.CRS != d.DictVersion {
 		d.CRSMismatch = true
 		d.CRSSeen = []string{e.CRS}
 	}
+}
+
+// hasDecision reports whether a threshold decision, a direct-block rule or
+// a custom rule unknown to the dictionary explains the event's interruption.
+func hasDecision(e *events.Event) bool {
+	for _, h := range e.Hits {
+		if h.Kind == crs.KindDecision || h.Kind == crs.KindBlocking || h.Kind == "unknown" {
+			return true
+		}
+	}
+	return false
 }
 
 func buildRulesData(q url.Values, d *wafData) {
@@ -362,9 +477,22 @@ func buildAnalysisData(q url.Values, site string, d *wafData) {
 	}
 	now := time.Now().UTC()
 	window := windowFor(site, dur)
+	if (q.Get("source") == "loki" || (q.Get("source") == "" && dur > 24*time.Hour)) && currentRuntime() != nil && currentRuntime().Loki.Configured() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		h, err := currentRuntime().Loki.Search(ctx, events.Query{From: now.Add(-dur), To: now, Site: site, Limit: events.AnalysisLimit}, "")
+		if err != nil {
+			window = nil
+			d.HistoryError = err.Error()
+		} else {
+			window = h.Events
+		}
+		d.HistoryBackend = "loki"
+	}
+	d.HistoryWarning = "Analysis uses at most 2,000 newest matching events. Counts describe audited events, not all requests."
 	report := analysis.Analyze(window, dictionary(), now.Add(-dur), now, site, now.Add(-24*time.Hour))
 	d.Report = &report
-	if store := eventStore(); store != nil {
+	if store := eventStore(); store != nil && d.HistoryBackend != "loki" {
 		d.Trend, d.TrendMax = trend(store.Rollups(), site, now)
 	}
 }
@@ -474,6 +602,19 @@ func buildHistoryData(site *domain.Site, d *wafData) {
 	d.Changes = entries
 }
 
+// buildRecentEvents lists the newest stored events of the last 24 hours.
+func buildRecentEvents(d *wafData) {
+	store := eventStore()
+	if store == nil {
+		return
+	}
+	list, _, err := store.QueryDisk(events.Query{From: time.Now().UTC().Add(-24 * time.Hour), Limit: 5})
+	if err != nil {
+		d.HistoryError = err.Error()
+	}
+	d.EventRows = buildEventRows(list, dictionary())
+}
+
 // buildWAFData fills the tab-specific WAF models.
 func buildWAFData(r *http.Request, tab string, data *pageData) {
 	q := r.URL.Query()
@@ -481,6 +622,7 @@ func buildWAFData(r *http.Request, tab string, data *pageData) {
 	switch tab {
 	case "overview":
 		buildAnalysisData(url.Values{"range": {"24h"}}, "", &data.wafData)
+		buildRecentEvents(&data.wafData)
 	case "events":
 		buildEventsData(q, &data.wafData)
 	case "event":
@@ -495,8 +637,10 @@ func buildWAFData(r *http.Request, tab string, data *pageData) {
 		buildAnalysisData(q, site, &data.wafData)
 	case "policy":
 		buildPolicyData(data.CurrentSite, &data.wafData)
+		data.HistoryBackend = q.Get("source")
 	case "exclusions":
 		buildExclusionsData(q, data.CurrentSite, &data.wafData)
+		data.HistoryBackend = q.Get("source")
 	case "rollback":
 		buildHistoryData(data.CurrentSite, &data.wafData)
 	}
@@ -529,13 +673,16 @@ func HandleFormPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.FormValue("action") == "preview" {
-		preview, perr := service.PreviewPolicy(domainName, policy)
-		window := windowFor(domainName, 14*24*time.Hour)
+		preview, perr := service.CreatePolicyDraft(domainName, policy)
+		window, historyErr := historyWindow(r.Context(), r.FormValue("source"), domainName, 14*24*time.Hour)
 		impact := analysis.Estimate(window, analysis.Profiles(window), dictionary(), analysis.Change{Policy: &policy})
 		renderTab(w, r, "policy", domainName, func(d *pageData) {
 			d.PolicyForm, d.Groups = form, groupOptions(form.Groups)
+			d.HistoryBackend = r.FormValue("source")
 			d.PolicyImpact = &impact
-			if perr != nil {
+			if historyErr != nil {
+				d.FormError = "History unavailable: " + historyErr.Error()
+			} else if perr != nil {
 				d.FormError = perr.Error()
 			} else {
 				d.PolicyPreview = &preview
@@ -543,7 +690,7 @@ func HandleFormPolicy(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if err := service.ApplyPolicy(actor(r, form.Reason), domainName, policy); err != nil {
+	if err := service.ApplyPolicyDraft(actor(r, form.Reason), domainName, policy, r.FormValue("draft_id")); err != nil {
 		slog.Warn("policy change failed", "domain", domainName, "error", err)
 		redirectAfterForm(w, r, "error")
 		return
@@ -554,7 +701,7 @@ func HandleFormPolicy(w http.ResponseWriter, r *http.Request) {
 func exclusionFromRequest(r *http.Request) (waf.Exclusion, exclusionForm) {
 	f := exclusionForm{Type: r.FormValue("type"), Value: strings.TrimSpace(r.FormValue("ruleId")),
 		Param: strings.TrimSpace(r.FormValue("param")), Path: strings.TrimSpace(r.FormValue("path")),
-		PathMatch: r.FormValue("path_match"), Note: strings.TrimSpace(r.FormValue("note")), Reason: r.FormValue("reason")}
+		PathMatch: r.FormValue("path_match"), Note: strings.TrimSpace(r.FormValue("note")), Reason: r.FormValue("reason"), Expires: r.FormValue("expires")}
 	if f.Type == "" {
 		f.Type = string(waf.ExcludeByID)
 	}
@@ -562,6 +709,9 @@ func exclusionFromRequest(r *http.Request) (waf.Exclusion, exclusionForm) {
 		f.Value = strings.TrimSpace(r.FormValue("tag"))
 	}
 	ex := waf.Exclusion{Type: waf.ExclusionType(f.Type), Value: f.Value, Param: f.Param, Path: f.Path, Note: f.Note}
+	if f.Expires != "" {
+		ex.Expires, _ = time.Parse("2006-01-02T15:04", f.Expires)
+	}
 	if ex.Path != "" {
 		ex.PathMatch = f.PathMatch
 	}
@@ -571,13 +721,16 @@ func exclusionFromRequest(r *http.Request) (waf.Exclusion, exclusionForm) {
 // previewExclusions renders the exclusions page with the diff and impact of
 // the candidate list.
 func previewExclusions(w http.ResponseWriter, r *http.Request, domainName string, form exclusionForm, candidate waf.Exclusion, merged []waf.Exclusion) {
-	preview, err := service.PreviewExclusions(domainName, merged)
-	window := windowFor(domainName, 14*24*time.Hour)
+	preview, err := service.CreateExclusionsDraft(domainName, merged)
+	window, historyErr := historyWindow(r.Context(), r.FormValue("source"), domainName, 14*24*time.Hour)
 	impact := analysis.Estimate(window, analysis.Profiles(window), dictionary(), analysis.Change{Exclusions: []waf.Exclusion{candidate}})
 	renderTab(w, r, "exclusions", domainName, func(d *pageData) {
 		d.ExclusionForm = form
+		d.HistoryBackend = r.FormValue("source")
 		d.ExclusionImpact = &impact
-		if err != nil {
+		if historyErr != nil {
+			d.FormError = "History unavailable: " + historyErr.Error()
+		} else if err != nil {
 			d.FormError = err.Error()
 		} else {
 			d.ExclusionPreview = &preview

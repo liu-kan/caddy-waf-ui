@@ -43,37 +43,46 @@ type Hit struct {
 
 // Event is one audited transaction.
 type Event struct {
-	Kind        string    `json:"kind"`
-	V           int       `json:"v"`
-	TS          time.Time `json:"ts"`
-	TxID        string    `json:"tx"`
-	Node        string    `json:"node,omitempty"`
-	Site        string    `json:"site"`
-	Host        string    `json:"host,omitempty"`
-	ClientIP    string    `json:"ip"`
-	Method      string    `json:"method,omitempty"`
-	Path        string    `json:"path,omitempty"`
-	QueryKeys   []string  `json:"qkeys,omitempty"`
-	Status      int       `json:"status,omitempty"`
-	Interrupted bool      `json:"interrupted"`
-	Engine      string    `json:"engine,omitempty"`
-	Action      string    `json:"action"`
-	Mode        string    `json:"mode,omitempty"`
-	Revision    string    `json:"rev,omitempty"`
-	BlockingPL  int       `json:"bpl,omitempty"`
-	DetectionPL int       `json:"dpl,omitempty"`
-	ThrIn       int       `json:"thr_in,omitempty"`
-	ThrOut      int       `json:"thr_out,omitempty"`
-	Tuning      bool      `json:"tune,omitempty"`
-	ScoreIn     int       `json:"score_in"`
-	ScoreOut    int       `json:"score_out"`
-	DetectIn    int       `json:"det_in,omitempty"`
-	ReportedIn  int       `json:"reported_in,omitempty"`
-	ReportedOut int       `json:"reported_out,omitempty"`
-	CRS         string    `json:"crs,omitempty"`
-	RuleIDs     string    `json:"rule_ids_csv"`
-	Hits        []Hit     `json:"hits"`
-	Source      string    `json:"source,omitempty"`
+	Kind      string    `json:"kind"`
+	V         int       `json:"v"`
+	TS        time.Time `json:"ts"`
+	TxID      string    `json:"tx"`
+	Node      string    `json:"node,omitempty"`
+	Site      string    `json:"site"`
+	Host      string    `json:"host,omitempty"`
+	ClientIP  string    `json:"ip"`
+	Method    string    `json:"method,omitempty"`
+	Path      string    `json:"path,omitempty"`
+	QueryKeys []string  `json:"qkeys,omitempty"`
+	// Query and Headers are the query string and request headers (audit
+	// part B) as kept by the event's redaction level; strict keeps neither.
+	Query          string            `json:"query,omitempty"`
+	Headers        map[string]string `json:"headers,omitempty"`
+	Status         int               `json:"status,omitempty"`
+	Interrupted    bool              `json:"interrupted"`
+	Engine         string            `json:"engine,omitempty"`
+	Action         string            `json:"action"`
+	Mode           string            `json:"mode,omitempty"`
+	Revision       string            `json:"rev,omitempty"`
+	BlockingPL     int               `json:"bpl,omitempty"`
+	DetectionPL    int               `json:"dpl,omitempty"`
+	ThrIn          int               `json:"thr_in,omitempty"`
+	ThrOut         int               `json:"thr_out,omitempty"`
+	Tuning         bool              `json:"tune,omitempty"`
+	ScoreIn        int               `json:"score_in"`
+	ScoreOut       int               `json:"score_out"`
+	DetectIn       int               `json:"det_in,omitempty"`
+	ReportedIn     int               `json:"reported_in,omitempty"`
+	ReportedOut    int               `json:"reported_out,omitempty"`
+	CRS            string            `json:"crs,omitempty"`
+	RuleIDs        string            `json:"rule_ids_csv"`
+	Hits           []Hit             `json:"hits"`
+	HitsTruncated  bool              `json:"hits_truncated,omitempty"`
+	HitsIncomplete bool              `json:"hits_incomplete,omitempty"`
+	EarlyBlocking  bool              `json:"early_blocking,omitempty"`
+	Source         string            `json:"source,omitempty"`
+	// Redaction is the level applied before storing: strict, standard or full.
+	Redaction string `json:"redaction,omitempty"`
 }
 
 // HasRule reports whether the event matched rule id.
@@ -113,3 +122,9 @@ func (e *Event) Categories() []string {
 	}
 	return out
 }
+
+// Key is the stable event identity across local and cloud ingestion.
+func (e *Event) Key() string { return e.Node + "\x00" + e.TxID }
+
+// AnalysisLimit bounds transient analysis memory on small deployments.
+const AnalysisLimit = 2000

@@ -28,85 +28,86 @@ const (
 
 // SourceProfile classifies one client address over the window.
 type SourceProfile struct {
-	IP         string
-	Events     int
-	Blocked    int
-	Rules      []int
-	Categories []string
-	Paths      int
-	Scanner    bool
-	Attack     bool
-	Reason     string
-	FirstSeen  time.Time
-	LastSeen   time.Time
+	IP         string    `json:"ip"`
+	Events     int       `json:"events"`
+	Blocked    int       `json:"blocked"`
+	Rules      []int     `json:"rules"`
+	Categories []string  `json:"categories"`
+	Paths      int       `json:"paths"`
+	Scanner    bool      `json:"scanner"`
+	Attack     bool      `json:"attack"`
+	Reason     string    `json:"reason,omitempty"`
+	FirstSeen  time.Time `json:"first_seen"`
+	LastSeen   time.Time `json:"last_seen"`
 }
 
 // RuleSummary aggregates one rule.
 type RuleSummary struct {
-	ID         int
-	Rule       crs.Rule
-	Known      bool
-	Hits       int
-	Events     int
-	Blocked    int
-	WouldBlock int
-	Detected   int
-	Sources    int
-	Attackers  int
-	Sites      []string
-	TopPaths   []Count
-	TopVars    []Count
-	FirstSeen  time.Time
-	LastSeen   time.Time
-	FPLikely   bool
-	FPReason   string
+	ID         int       `json:"id"`
+	Rule       crs.Rule  `json:"rule"`
+	Known      bool      `json:"known"`
+	Hits       int       `json:"hits"`
+	Events     int       `json:"events"`
+	Blocked    int       `json:"blocked"`
+	WouldBlock int       `json:"would_block"`
+	Detected   int       `json:"detected"`
+	Sources    int       `json:"sources"`
+	Attackers  int       `json:"attackers"`
+	Sites      []string  `json:"sites"`
+	TopPaths   []Count   `json:"top_paths"`
+	TopVars    []Count   `json:"top_vars"`
+	FirstSeen  time.Time `json:"first_seen"`
+	LastSeen   time.Time `json:"last_seen"`
+	FPLikely   bool      `json:"fp_likely"`
+	FPReason   string    `json:"fp_reason,omitempty"`
 }
 
 // Count is a labelled counter.
 type Count struct {
-	Key     string
-	Count   int
-	Sources int
+	Key     string `json:"key"`
+	Count   int    `json:"count"`
+	Sources int    `json:"sources"`
 }
 
 // PathSummary aggregates one request path.
 type PathSummary struct {
-	Path    string
-	Events  int
-	Sources int
-	Rules   []Count
+	Path    string  `json:"path"`
+	Events  int     `json:"events"`
+	Sources int     `json:"sources"`
+	Rules   []Count `json:"rules"`
 }
 
 // FPCandidate is a rule/path/variable combination that looks like a false
 // positive, with the narrowest exclusion that would cover it.
 type FPCandidate struct {
-	Rule     int
-	RuleMsg  string
-	Site     string
-	Path     string
-	Var      string
-	Events   int
-	Sources  int
-	Blocking int
-	Reason   string
+	Rule     int    `json:"rule"`
+	RuleMsg  string `json:"rule_msg,omitempty"`
+	Site     string `json:"site"`
+	Path     string `json:"path"`
+	Var      string `json:"var"`
+	Events   int    `json:"events"`
+	Sources  int    `json:"sources"`
+	Blocking int    `json:"blocking"`
+	Reason   string `json:"reason"`
 }
 
 // Report is the analysis of one window.
 type Report struct {
-	From, To     time.Time
-	Site         string
-	Events       int
-	Blocked      int
-	WouldBlock   int
-	Detected     int
-	Sources      int
-	Rules        []RuleSummary
-	TopSources   []SourceProfile
-	Attackers    []SourceProfile
-	Paths        []PathSummary
-	FPCandidates []FPCandidate
-	NewRules     []RuleSummary
-	ScoreGap     int
+	From         time.Time       `json:"from"`
+	To           time.Time       `json:"to"`
+	Site         string          `json:"site,omitempty"`
+	Events       int             `json:"events"`
+	Blocked      int             `json:"blocked"`
+	WouldBlock   int             `json:"would_block"`
+	Detected     int             `json:"detected"`
+	Sources      int             `json:"sources"`
+	Rules        []RuleSummary   `json:"rules"`
+	TopSources   []SourceProfile `json:"top_sources"`
+	Attackers    []SourceProfile `json:"attackers"`
+	Paths        []PathSummary   `json:"paths"`
+	FPCandidates []FPCandidate   `json:"fp_candidates"`
+	NewRules     []RuleSummary   `json:"new_rules"`
+	ScoreGap     int             `json:"score_gap"`
 }
 
 // Analyze builds the report of evs (chronological), using dict for rule

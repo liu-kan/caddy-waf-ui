@@ -60,7 +60,24 @@ func HandleAPIEvents(w http.ResponseWriter, r *http.Request) {
 	if store == nil {
 		return
 	}
-	list, total := store.Query(queryFromRequest(r))
+	query := queryFromRequest(r)
+	if r.URL.Query().Get("source") == "loki" {
+		rt := currentRuntime()
+		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+		page, err := rt.Loki.Search(ctx, query, r.URL.Query().Get("cursor"))
+		if err != nil {
+			writeJSONValue(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSONValue(w, http.StatusOK, page)
+		return
+	}
+	list, total, err := store.QueryDisk(query)
+	if err != nil {
+		writeJSONValue(w, http.StatusInternalServerError, map[string]any{"error": err.Error(), "partial": true})
+		return
+	}
 	if list == nil {
 		list = []*events.Event{}
 	}
@@ -73,7 +90,17 @@ func HandleAPIEvent(w http.ResponseWriter, r *http.Request) {
 	if store == nil {
 		return
 	}
-	e, ok := store.Get(r.PathValue("tx"))
+	e, ok := store.GetFor(r.PathValue("tx"), r.URL.Query().Get("node"))
+	if !ok && currentRuntime().Loki.Configured() {
+		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+		ts, _ := time.Parse(time.RFC3339Nano, r.URL.Query().Get("ts"))
+		remote, err := currentRuntime().Loki.Find(ctx, r.PathValue("tx"), r.URL.Query().Get("node"), ts)
+		if err == nil {
+			e = remote
+			ok = true
+		}
+	}
 	if !ok {
 		http.Error(w, "Event not found", http.StatusNotFound)
 		return
@@ -132,7 +159,17 @@ func HandleAPIExplain(w http.ResponseWriter, r *http.Request) {
 	if store == nil {
 		return
 	}
-	e, ok := store.Get(r.PathValue("tx"))
+	e, ok := store.GetFor(r.PathValue("tx"), r.URL.Query().Get("node"))
+	if !ok && currentRuntime().Loki.Configured() {
+		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+		ts, _ := time.Parse(time.RFC3339Nano, r.URL.Query().Get("ts"))
+		remote, err := currentRuntime().Loki.Find(ctx, r.PathValue("tx"), r.URL.Query().Get("node"), ts)
+		if err == nil {
+			e = remote
+			ok = true
+		}
+	}
 	if !ok {
 		http.Error(w, "Event not found", http.StatusNotFound)
 		return
@@ -147,7 +184,15 @@ func HandleAPIExplain(w http.ResponseWriter, r *http.Request) {
 		}
 		hits = append(hits, h)
 	}
-	window := windowFor(e.Site, 14*24*time.Hour)
+	source := r.URL.Query().Get("source")
+	if e.Source == events.SourceLoki {
+		source = "loki"
+	}
+	window, historyErr := historyWindow(r.Context(), source, e.Site, 14*24*time.Hour)
+	if historyErr != nil {
+		writeJSONValue(w, http.StatusBadGateway, map[string]any{"error": historyErr.Error()})
+		return
+	}
 	var suggestions []apiSuggestion
 	for _, s := range analysis.Suggest(e, window, analysis.Profiles(window), dict) {
 		suggestions = append(suggestions, apiSuggestion{Rule: s.Rule, Var: s.Var, Scope: s.Scope, Description: s.Exclusion.Describe(),
@@ -198,8 +243,31 @@ func HandleAPIAnalysis(w http.ResponseWriter, r *http.Request) {
 	_, dur := parseRange(r.URL.Query().Get("range"), "7d")
 	site := r.URL.Query().Get("site")
 	now := time.Now().UTC()
-	report := analysis.Analyze(windowFor(site, dur), dictionary(), now.Add(-dur), now, site, now.Add(-24*time.Hour))
-	writeJSONValue(w, http.StatusOK, report)
+	window, err := historyWindow(r.Context(), r.URL.Query().Get("source"), site, dur)
+	if err != nil {
+		writeJSONValue(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+		return
+	}
+	report := analysis.Analyze(window, dictionary(), now.Add(-dur), now, site, now.Add(-24*time.Hour))
+	writeJSONValue(w, http.StatusOK, struct {
+		analysis.Report
+		Coverage string `json:"coverage"`
+	}{report, "At most 2,000 newest matching audited events; not all requests"})
+}
+
+func historyWindow(ctx context.Context, source, site string, dur time.Duration) ([]*events.Event, error) {
+	if source != "loki" {
+		return windowFor(site, dur), nil
+	}
+	rt := currentRuntime()
+	if rt == nil || !rt.Loki.Configured() {
+		return nil, errors.New("loki history is not configured")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	now := time.Now().UTC()
+	p, err := rt.Loki.Search(ctx, events.Query{From: now.Add(-dur), To: now, Site: site, Limit: events.AnalysisLimit}, "")
+	return p.Events, err
 }
 
 // PolicyRequest is the body of policy changes.
@@ -249,6 +317,7 @@ type ImpactRequest struct {
 	Policy     *waf.Policy     `json:"policy,omitempty"`
 	Mode       string          `json:"mode,omitempty"`
 	Range      string          `json:"range,omitempty"`
+	Source     string          `json:"source,omitempty"`
 }
 
 // HandleAPIImpact estimates a change (exclusions, policy and/or mode) over
@@ -278,7 +347,11 @@ func HandleAPIImpact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, dur := parseRange(req.Range, "14d")
-	window := windowFor(domainName, dur)
+	window, historyErr := historyWindow(r.Context(), req.Source, domainName, dur)
+	if historyErr != nil {
+		writeJSONValue(w, http.StatusBadGateway, map[string]any{"error": historyErr.Error()})
+		return
+	}
 	impact := analysis.Estimate(window, analysis.Profiles(window), dictionary(),
 		analysis.Change{Exclusions: req.Exclusions, Policy: req.Policy, Mode: req.Mode})
 	resp := map[string]any{"impact": toAPIImpact(impact)}

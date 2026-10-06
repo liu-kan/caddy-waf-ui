@@ -41,8 +41,8 @@ LABEL org.opencontainers.image.licenses="MIT"
 RUN apk --no-cache add ca-certificates=20260909-r0 openssl=3.5.9-r0 tzdata=2026d-r0 \
     && addgroup -g 65532 -S uiuser \
     && adduser -u 65532 -S -D -G uiuser -g '' uiuser \
-    && mkdir -p /ui-managed /backups /data/logs /config /run/caddy-admin \
-    && chown -R uiuser:uiuser /ui-managed /backups /data /config /run/caddy-admin
+    && mkdir -p /ui-managed /backups /ui-data /data/logs /config /run/caddy-admin \
+    && chown -R uiuser:uiuser /ui-managed /backups /ui-data /data /config /run/caddy-admin
 
 USER uiuser
 

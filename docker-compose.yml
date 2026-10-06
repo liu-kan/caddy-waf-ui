@@ -36,6 +36,8 @@ services:
       - caddy-ui-config:/ui-managed
       - caddy-ui-backups:/backups
       - caddy_admin:/run/caddy-admin
+      - caddy-ui-data:/ui-data
+      - alloy-data:/alloy-data
 
   ui-config-init:
     <<: *ui-image
@@ -87,7 +89,7 @@ services:
     depends_on:
       ui-config-init:
         condition: service_completed_successfully
-    networks: [caddy-edge]
+    networks: [caddy-edge, waf-probe]
     logging:
       driver: json-file
       options: {max-size: "10m", max-file: "3"}
@@ -109,11 +111,13 @@ services:
     mem_limit: 256m
     cpus: 0.50
     ports: ["127.0.0.1:8080:8080"]
-    networks: [ui-access]
+    networks: [ui-access, waf-probe]
     volumes:
       - caddy-ui-config:/ui-managed:rw
       - caddy-ui-backups:/backups:rw
-      - caddy_audit:/data/logs:ro
+      - caddy-ui-data:/ui-data:rw
+      - ./waf-custom:/etc/caddy/waf-custom:ro
+      - caddy_audit:/data/logs:rw
       - caddy_admin:/run/caddy-admin:ro
       - ${CADDYFILE_PATH:-./Caddyfile.example}:/etc/caddy/Caddyfile:ro
     environment:
@@ -124,6 +128,22 @@ services:
       CADDY_UI_BACKUP_KEEP: ${CADDY_UI_BACKUP_KEEP:-10}
       CADDY_UI_BIND: 0.0.0.0:8080
       CADDY_UI_LOG_LEVEL: ${CADDY_UI_LOG_LEVEL:-info}
+      CADDY_UI_DATA_DIR: /ui-data
+      CADDY_UI_EVENTS_MEMORY_MAX: ${CADDY_UI_EVENTS_MEMORY_MAX:-1000}
+      CADDY_UI_EVENTS_RETENTION_DAYS: ${CADDY_UI_EVENTS_RETENTION_DAYS:-14}
+      CADDY_UI_EVENTS_DISK_MAX_MB: ${CADDY_UI_EVENTS_DISK_MAX_MB:-128}
+      CADDY_UI_AUDIT_ROTATE_MB: ${CADDY_UI_AUDIT_ROTATE_MB:-32}
+      CADDY_UI_MATCHED_VALUES: ${CADDY_UI_MATCHED_VALUES:-false}
+      CADDY_UI_NODE: ${CADDY_UI_NODE:-caddy-local}
+      CADDY_UI_METRICS_TOKEN: ${CADDY_UI_METRICS_TOKEN:-}
+      CADDY_UI_CRS_RULES_DIR: ${CADDY_UI_CRS_RULES_DIR:-}
+      CADDY_UI_LOKI_URL: ${CADDY_UI_LOKI_URL:-}
+      CADDY_UI_LOKI_USER: ${GRAFANA_CLOUD_LOKI_USER:-}
+      CADDY_UI_LOKI_TOKEN: ${GRAFANA_CLOUD_LOGS_READ_TOKEN:-}
+      CADDY_UI_LOKI_SELECTOR: ${CADDY_UI_LOKI_SELECTOR:-}
+      CADDY_UI_LOKI_SYNC_INTERVAL: ${CADDY_UI_LOKI_SYNC_INTERVAL:-0s}
+      CADDY_UI_GRAFANA_URL: ${CADDY_UI_GRAFANA_URL:-}
+      CADDY_UI_PROBE_URLS: ${CADDY_UI_PROBE_URLS:-}
     depends_on:
       caddy:
         condition: service_started
@@ -131,7 +151,44 @@ services:
       driver: json-file
       options: {max-size: "10m", max-file: "3"}
 
+  alloy:
+    image: ${ALLOY_IMAGE:-grafana/alloy:v1.20.0}
+    profiles: [cloud]
+    user: "65532:65532"
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 256m
+    cpus: 0.50
+    command: [run, /etc/alloy/config.alloy, --storage.path=/alloy-data, --server.http.listen-addr=127.0.0.1:12345, --disable-reporting]
+    environment:
+      GOMEMLIMIT: 160MiB
+      GRAFANA_CLOUD_LOKI_URL: ${GRAFANA_CLOUD_LOKI_URL:-}
+      GRAFANA_CLOUD_LOKI_USER: ${GRAFANA_CLOUD_LOKI_USER:-}
+      GRAFANA_CLOUD_LOGS_WRITE_TOKEN: ${GRAFANA_CLOUD_LOGS_WRITE_TOKEN:-}
+      CADDY_UI_METRICS_TOKEN: ${CADDY_UI_METRICS_TOKEN:-}
+      GRAFANA_CLOUD_PROMETHEUS_URL: ${GRAFANA_CLOUD_PROMETHEUS_URL:-}
+      GRAFANA_CLOUD_PROMETHEUS_USER: ${GRAFANA_CLOUD_PROMETHEUS_USER:-}
+      GRAFANA_CLOUD_METRICS_WRITE_TOKEN: ${GRAFANA_CLOUD_METRICS_WRITE_TOKEN:-}
+    volumes:
+      - ${ALLOY_CONFIG_PATH:-./alloy/config.alloy}:/etc/alloy/config.alloy:ro
+      - caddy-ui-data:/ui-data:ro
+      - caddy_audit:/caddy-logs:ro
+      - alloy-data:/alloy-data:rw
+    networks: [ui-access]
+    depends_on:
+      runtime-init:
+        condition: service_completed_successfully
+      caddy-waf-ui:
+        condition: service_started
+    logging:
+      driver: json-file
+      options: {max-size: "5m", max-file: "2"}
+
 volumes:
+  caddy-ui-data:
+  alloy-data:
   caddy_data:
   caddy_config:
   caddy_audit:
@@ -140,6 +197,8 @@ volumes:
   caddy-ui-backups:
 
 networks:
+  waf-probe:
+    internal: true
   caddy-edge:
     driver: bridge
   # A regular bridge is needed for Docker to publish the loopback UI port.

@@ -22,9 +22,15 @@
     {{ end }}
   </div>
   {{ template "pipeline-status" . }}
-  <hr class="hr-soft">
+  <p class="banner-sub">{{ .HistorySource }}</p>
+ {{ if .HistoryError }}<p role="alert" class="u-text-danger">{{ .HistoryError }}</p>{{ end }}
+ {{ if .HistoryWarning }}<p class="u-text-amber">{{ .HistoryWarning }}</p>{{ end }}
+ <hr class="hr-soft">
   <form method="GET" action="/" class="filter-bar filter-bar--wrap">
     <input type="hidden" name="tab" value="events">
+    <label class="filter-field">Storage
+      <select name="source"><option value="local">Local recent files</option>{{ if .LokiReady }}<option value="loki" {{ if eq .EventFilter.Source "loki" }}selected{{ end }}>Grafana Cloud Loki</option>{{ end }}</select>
+    </label>
     <label class="filter-field">Site
       <select name="site" class="filter-select">
         <option value="">All sites</option>
@@ -83,15 +89,15 @@
       <tbody>
         {{ range .EventRows }}
           <tr>
-            <td class="cell-mono-muted"><a href="/?tab=event&amp;tx={{ .E.TxID }}">{{ date .E.TS "2006-01-02 15:04:05" }}</a></td>
+            <td class="cell-mono-muted"><a href="/?tab=event&amp;tx={{ .E.TxID }}&amp;node={{ .E.Node }}&amp;source={{ $.EventFilter.Source }}&amp;ts={{ date .E.TS "2006-01-02T15:04:05.999999999Z07:00" }}">{{ date .E.TS "2006-01-02 15:04:05" }}</a></td>
             <td class="u-mono">{{ .E.Site }}</td>
             <td><span class="{{ .ActionClass }}">{{ .ActionLabel }}</span></td>
             <td class="cell-score">{{ .ScoreLabel }}</td>
             <td class="cell-uri" title="{{ .E.Method }} {{ .E.Path }}"><span class="u-text-dim">{{ .E.Method }}</span> {{ .E.Path }}</td>
-            <td class="cell-client"><a href="/?tab=events&amp;ip={{ .E.ClientIP }}&amp;range=14d">{{ .E.ClientIP }}</a></td>
+            <td class="cell-client"><a href="/?tab=events&amp;ip={{ .E.ClientIP }}&amp;range=14d&amp;source={{ $.EventFilter.Source }}">{{ .E.ClientIP }}</a></td>
             <td>
               {{ range .Rules }}
-                <a href="/?tab=rules&amp;id={{ .ID }}" class="rule-pill rule-pill--{{ .Kind }}" title="{{ .Msg }}">{{ .ID }}</a>
+                <a href="/?tab=rules&amp;id={{ .ID }}" class="rule-pill rule-pill--{{ .Kind }}" title="{{ .Msg }}">{{ .ID }} · {{ .Msg }}</a>{{ if .Note }}<details class="rule-note"><summary>Meaning</summary><span lang="zh-CN">{{ .Note }}</span></details>{{ end }}
               {{ end }}
             </td>
           </tr>
@@ -110,7 +116,7 @@
 {{ if or .EventPrev .EventNext }}
 <div class="pager">
   <div>{{ if .EventPrev }}<a href="{{ .EventPrev }}" class="secondary pager-link">← Newer</a>{{ else }}<span class="u-text-dim">← Newer</span>{{ end }}</div>
-  <div>Page {{ .EventPage }} of {{ .EventPages }}</div>
+  <div>{{ if .EventPages }}Page {{ .EventPage }} of {{ .EventPages }}{{ else }}Cloud history{{ end }}</div>
   <div>{{ if .EventNext }}<a href="{{ .EventNext }}" class="secondary pager-link">Older →</a>{{ else }}<span class="u-text-dim">Older →</span>{{ end }}</div>
 </div>
 {{ end }}

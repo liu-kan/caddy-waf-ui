@@ -59,13 +59,29 @@ func Estimate(evs []*events.Event, profiles []SourceProfile, dict *crs.Dictionar
 		sources     = map[string]bool{}
 		attackSrcs  = map[string]bool{}
 		mismatch    int
+		incomplete  int
+		unsupported bool
 		unreplayed  int
 		untuned     int
 		noVar       int
 		unknownTags int
 	)
 	matchers := compileExclusions(change.Exclusions)
+	if change.Policy != nil {
+		p := change.Policy.Normalize()
+		unsupported = p.EarlyBlocking || p.RequestBodyLimit > 0 || len(p.AllowedMethods) > 0 || len(p.AllowedContentTypes) > 0
+		for _, g := range p.DisabledGroups {
+			for _, r := range dict.Rules {
+				if r.ID/1000 == atoiGroup(g) {
+					matchers = append(matchers, exclusionMatcher{ex: waf.Exclusion{Type: waf.ExcludeByID, Value: strconv.Itoa(r.ID)}, id: r.ID})
+				}
+			}
+		}
+	}
 	for _, e := range evs {
+		if e.HitsTruncated || e.HitsIncomplete || e.EarlyBlocking {
+			incomplete++
+		}
 		bpl, dpl, in, out := e.Thresholds()
 		mode := e.Mode
 		if mode == "" {
@@ -124,6 +140,18 @@ func Estimate(evs []*events.Event, profiles []SourceProfile, dict *crs.Dictionar
 		if len(im.Samples) < maxSamples {
 			im.Samples = append(im.Samples, e)
 		}
+	}
+	if incomplete > 0 {
+		im.Caveats = append(im.Caveats, fmt.Sprintf("%d event(s) have incomplete hits or early blocking; estimates cannot reproduce unexecuted rules", incomplete))
+	}
+	if unsupported {
+		im.Caveats = append(im.Caveats, "Request body limits, methods, content types and early blocking cannot be replayed from redacted history; only score and exclusion changes are estimated")
+	}
+	if change.Policy != nil {
+		im.Caveats = append(im.Caveats, "Previously disabled or excluded rules did not execute; re-enabling them can cause additional blocks that this history cannot predict")
+	}
+	if len(evs) >= events.AnalysisLimit {
+		im.Caveats = append(im.Caveats, "Analysis is limited to the 2,000 newest matching events; narrow the interval for complete coverage")
 	}
 	im.Sources = len(sources)
 	im.AttackSources = len(attackSrcs)
@@ -228,6 +256,9 @@ func argKey(variable string) string {
 
 func excluded(h events.Hit, e *events.Event, matchers []exclusionMatcher, dict *crs.Dictionary) bool {
 	for _, m := range matchers {
+		if !m.ex.Expires.IsZero() && !e.TS.Before(m.ex.Expires) {
+			continue
+		}
 		switch m.ex.Type {
 		case waf.ExcludeByID:
 			if h.ID != m.id {
@@ -348,3 +379,5 @@ func Suggest(e *events.Event, window []*events.Event, profiles []SourceProfile, 
 	sort.SliceStable(suggestions, func(i, j int) bool { return suggestions[i].Rule < suggestions[j].Rule })
 	return suggestions
 }
+
+func atoiGroup(s string) int { n, _ := strconv.Atoi(s); return n }

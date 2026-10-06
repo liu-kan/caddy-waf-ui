@@ -228,5 +228,5 @@ var (
 	Reloads = Default.NewCounterVec("waf_reload_total",
 		"Configuration changes sent to Caddy, by result (success, failed).", "result")
 	IngestErrors = Default.NewCounterVec("waf_ingest_errors_total",
-		"Audit log ingestion problems, by kind (parse, read, store, truncate).", "kind")
+		"Audit log ingestion problems, by kind (parse, read, store).", "kind")
 )

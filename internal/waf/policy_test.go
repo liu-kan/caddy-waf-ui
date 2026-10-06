@@ -57,7 +57,7 @@ func TestPolicyRendersInExecutionOrder(t *testing.T) {
 		`# ui-policy: {"blocking_pl":2,"detection_pl":3,"inbound_threshold":10,"outbound_threshold":8`,
 		"coraza_waf {",
 		"# waf-config-revision: " + g.Revision,
-		`SecComponentSignature "caddy-waf-ui;v=1;site=api.example.com;rev=` + g.Revision + `;mode=On;bpl=2;dpl=3;in=10;out=8;tune=1"`,
+		`SecComponentSignature "caddy-waf-ui;v=1;site=api.example.com;rev=` + g.Revision + `;mode=On;bpl=2;dpl=3;in=10;out=8;tune=1;early=1"`,
 		"Include @crs-setup.conf.example",
 		`SecAction "id:9001000,phase:1,pass,t:none,nolog,setvar:tx.blocking_paranoia_level=2"`,
 		`SecAction "id:9001001,phase:1,pass,t:none,nolog,setvar:tx.detection_paranoia_level=3"`,

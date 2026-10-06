@@ -5,9 +5,35 @@
 	admin {$CADDY_ADMIN_LISTEN:unix//run/caddy-admin/admin.sock}
 	order coraza_waf first
 	skip_install_trust
+	# Runtime errors stay local; Alloy ships only timestamp, level and logger.
+	log default {
+		output file /data/logs/error.json {
+			roll_size 5MiB
+			roll_keep 2
+			roll_keep_for 48h
+		}
+		format json
+		level ERROR
+	}
 }
 
-localhost {
+http://localhost {
+	# Access metadata for request totals; headers and query values are removed.
+	log {
+		output file /data/logs/access.json {
+			roll_size 5MiB
+			roll_keep 2
+			roll_keep_for 48h
+		}
+		format filter {
+			wrap json
+			fields {
+				request>headers delete
+				request>uri delete
+			}
+		}
+	}
+	log_append request_path {http.request.uri.path}
 	route {
 		import /etc/caddy/ui-managed/ip-rules-localhost.conf
 		import /etc/caddy/ui-managed/waf-localhost.conf

@@ -6,7 +6,8 @@
     <div>
       <h1 class="banner-title banner-title-base">🔑 IP Access Rules (Denylist / Allowlist)</h1>
       <p class="banner-sub">
-        Configures <code>SecRule REMOTE_ADDR "@ipMatch ..."</code> directives for domain access control.
+        Generates Caddy <code>client_ip</code> matchers with <code>abort</code> in <code>ip-rules-{{ slug .CurrentSite.Domain }}.conf</code>, imported before the WAF.
+        A matching connection is closed without a response. Client addresses follow your trusted proxy settings.
       </p>
     </div>
 
@@ -42,8 +43,8 @@
         <label>
           Action:
           <select name="action">
-            <option value="DENY" selected>DENY (403 Forbidden)</option>
-            <option value="ALLOW">ALLOW (Bypass Phase 1 checks)</option>
+            <option value="DENY" selected>DENY (close the connection)</option>
+            <option value="ALLOW">ALLOW (allowlist: once it has an entry, every other address is closed)</option>
           </select>
         </label>
         <button type="submit">Save IP Access Directive</button>

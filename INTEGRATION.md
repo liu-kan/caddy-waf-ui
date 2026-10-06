@@ -41,15 +41,16 @@ Caddy's DHI runtime and the UI both run as UID/GID 65532. Runtime UI permissions
 | Base Caddyfile | `/etc/caddy/Caddyfile:ro` | Same path, read-only, used for `/load` |
 | Managed overlays | `/etc/caddy/ui-managed:ro` | `/ui-managed:rw` |
 | Backups | None | `/backups:rw` |
-| Audit directory | `/data/logs:rw` | `/data/logs:ro` |
+| Audit directory | `/data/logs:rw` | `/data/logs:rw` (rename/reopen rotation) |
+| UI data (events, journal, drafts, cursors) | None | `/ui-data:rw` |
 | Certificate data | `/data:rw` | Not mounted |
 | Caddy config | `/config:rw` | Not mounted |
 | Admin socket | `/run/caddy-admin:rw` | `/run/caddy-admin:ro` |
-| Operator rules | `/etc/caddy/waf-custom:ro` | Not needed |
+| Operator rules | `/etc/caddy/waf-custom:ro` | `/etc/caddy/waf-custom:ro` |
 
 `runtime-init` runs once as root with only CHOWN/FOWNER/DAC_OVERRIDE capabilities. It prepares volume roots and migrates only UI-owned overlays/backups from their old UID, setting 0750 directories and 0640 files. It does not recursively chown certificate data or application/access logs. The regular Caddy and UI containers drop all capabilities except Caddy's NET_BIND_SERVICE.
 
-For existing bind mounts, back up overlays and snapshots before migrating ownership. Grant UID 65532 read/write access to the UI-owned directory and read access to audit logs. Retain the existing log path and data: changing to a new empty audit volume would hide historical logs. Do not relax every log to 0644. Bind the audit directory separately into the UI rather than mounting all certificate data.
+For existing bind mounts, back up overlays and snapshots before migrating ownership. Grant UID 65532 read/write access to the UI-owned directories and to the audit log directory (rotation renames the raw file). Retain the existing log path and data: changing to a new empty audit volume would hide historical logs. Do not relax every log to 0644. Bind the audit directory separately into the UI rather than mounting all certificate data.
 
 ## Admin socket and HTTP compatibility
 
@@ -69,7 +70,7 @@ Defaults use the embedded CRS files. Operator-owned before/after includes let cu
 
 With `CADDY_UI_CRS_MODE=files`, defaults are `/etc/caddy/coraza.conf`, `/etc/caddy/owasp-crs/crs-setup.conf` and `/etc/caddy/owasp-crs/rules/*.conf`. Override them as needed and mount the rules/config into Caddy read-only. Embedded mode needs no such mounts. Apply the current mode in the UI after changing baseline settings or custom file contents.
 
-New audit files use `SecAuditLogFileMode 0640`, directories 0750. `SecResponseBodyAccess Off` is the default for SSE/WebSocket and streaming API use; request inspection still runs. Defaults are a starting point: verify login, uploads, OAuth/MCP callbacks, streaming TTFB and long connections against your actual deployment before enabling blocking.
+New audit files use `SecAuditLogFileMode 0640`, directories 0750. `SecResponseBodyAccess Off` is the default for SSE/WebSocket and streaming API use; request inspection still runs. Defaults are a starting point: verify login, uploads, OAuth/MCP callbacks, streaming TTFB and long connections against your actual deployment before enabling blocking. The baseline `SecRequestBodyLimit` is 13107200 bytes: in On mode larger request bodies are rejected with HTTP 413 (DetectionOnly does not reject them). Raise the site policy's request body limit for upload endpoints before switching to On.
 
 ## Rule updates and recovery
 
@@ -79,6 +80,10 @@ Snapshots use nanosecond timestamps and exclusive creation; older second-resolut
 
 Exclusion changes/rollback snapshot and update both the canonical file and its derived WAF overlay. Reload failure restores both. Verification failure after a successful `/load` also triggers a compensating reload. Mutations are serialized within this UI process; run one UI writer per overlay volume. A failure of compensation is returned explicitly and requires operator recovery.
 
-WAF and exclusion snapshots are independent. WAF rollback keeps the current canonical exclusion list; use an exclusion snapshot to roll back the list. Legacy snapshots without the new generated regions retain their original bytes. Migrate old overlays by reapplying a mode before treating them as part of the new compiled-exclusion contract.
+WAF and exclusion snapshots are independent. WAF rollback restores the snapshot's mode and policy and regenerates the overlay with the current baseline and canonical exclusion list; use an exclusion snapshot to roll back the list. Legacy snapshots without a policy line restore their mode with the default CRS policy.
 
 Initialization preserves existing configs. To recover or reinitialize a site deliberately, back up its three overlay files, remove/move only that site's WAF file, then rerun `ui-config-init`. Do not remove whole volumes to reset a site: they contain certificates and backup history.
+
+## Optional cloud history and local investigation
+
+Follow [LOCAL-CLOUD.md](LOCAL-CLOUD.md) for Alloy, separate Loki read/write credentials, local rule explanations, reviewed artifacts, temporary exclusions and origin probes. Add persistent `caddy-ui-data` and `alloy-data` volumes, prepare UID 65532 ownership before startup and mount custom rules read-only into the UI as well as Caddy. The audit directory alone is writable by the UI for rename/reopen rotation; certificate data is not mounted. The example access/runtime file logging is an operator-owned Caddyfile change: merge its redaction/rotation rules into your existing log configuration deliberately.

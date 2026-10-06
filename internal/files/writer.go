@@ -33,6 +33,10 @@ func AtomicWrite(path string, content []byte) (err error) {
 		_ = tmp.Close()
 		return err
 	}
+	if err = tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
 	if err = tmp.Close(); err != nil {
 		return err
 	}

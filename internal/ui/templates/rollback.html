@@ -93,7 +93,7 @@
           <tr>
             <td class="cell-mono-muted">{{ date .TS "2006-01-02 15:04:05" }}</td>
             <td>
-              <strong>{{ .Action }}</strong> — {{ .Summary }}
+              <strong>{{ .Action }}</strong> — {{ .Summary }}{{ range .Stages }}<span class="badge-tag" title="{{ .Detail }}">{{ .Name }}: {{ .Result }}</span>{{ end }}
               {{ if .Diff }}<details class="rule-comment"><summary>Diff</summary><pre class="diff">{{ .Diff }}</pre></details>{{ end }}
             </td>
             <td class="u-text-sm">{{ .Reason }}</td>

@@ -52,6 +52,8 @@ help:
 	@echo "  make build            Compile all packages"
 	@echo "  make docker-build     Build the Docker image"
 	@echo "  make compose-config   Validate the docker-compose configuration"
+	@echo "  make crs-version      Print the Caddy, Coraza and CRS versions compiled into CADDY_IMAGE"
+	@echo "  make crs-dict         Regenerate the embedded rule dictionary (CRS_VERSION=...)"
 	@echo "  make clean            Remove test and build artifacts"
 	@echo ""
 	@echo "Release"
@@ -212,6 +214,27 @@ docker-build:                            # Build the local Docker image
 	@echo "==> Docker build"
 	@docker build -t caddy-waf-ui:local .
 	@echo "✓ Docker build passed."
+
+# CRS version compiled into the backend image (coraza-coreruleset module).
+# Regenerate the embedded rule dictionary whenever the backend changes it:
+#   make crs-version && make crs-dict CRS_VERSION=4.26.0
+# Then update the expected version in internal/crs/dict_test.go.
+CRS_VERSION ?= 4.25.0
+
+.PHONY: crs-version
+crs-version:                             # Print the Caddy, Coraza and coraza-coreruleset versions inside CADDY_IMAGE
+	@docker run --rm --entrypoint /usr/local/bin/caddy $${CADDY_IMAGE:-liukan/caddy-with-auth:latest} build-info | grep -E 'caddyserver/caddy/v2[[:space:]]|coraza-coreruleset|coraza/v3|coraza-caddy'
+
+.PHONY: crs-dict
+crs-dict:                                # Regenerate internal/crs/data/crs-dictionary.json.gz for CRS_VERSION
+	@set -eu; tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+	rules=$$(cd "$$tmp" && go mod download -json github.com/corazawaf/coraza-coreruleset/v4@v$(CRS_VERSION) | sed -n 's/.*"Dir": "\(.*\)".*/\1/p'); \
+	git clone --quiet --depth 1 --branch v$(CRS_VERSION) https://github.com/coreruleset/coreruleset "$$tmp/crs"; \
+	go run ./cmd/crsdict \
+	  -rules "$$rules/rules" -source github.com/corazawaf/coraza-coreruleset/v4@v$(CRS_VERSION) \
+	  -url https://github.com/corazawaf/coraza-coreruleset/blob/v$(CRS_VERSION)/rules/ \
+	  -docs "$$tmp/crs" -docs-source github.com/coreruleset/coreruleset@v$(CRS_VERSION) \
+	  -docs-url https://github.com/coreruleset/coreruleset/blob/v$(CRS_VERSION)/
 
 .PHONY: compose-config
 compose-config:                          # Validate the docker-compose configuration

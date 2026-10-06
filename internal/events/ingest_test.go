@@ -58,6 +58,52 @@ func appendFile(t *testing.T, path, data string) {
 	}
 }
 
+func TestIngestSkipsRecordsWithoutRuleMatches(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "events"), 14*24*time.Hour, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(t.TempDir(), "audit.log")
+	lines := fixtureLines(t)
+	appendFile(t, logPath, ruleLessRecord+"\n"+lines[0]+"\n")
+	in := newIngester(t, logPath, store)
+	if err := in.Poll(); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.Stats().Stored; got != 1 {
+		t.Fatalf("only the record with rule matches is an event, stored %d", got)
+	}
+	if st := in.Status(); st.LastError != "" || st.Offset != st.Size {
+		t.Fatalf("the rule-less record must be consumed without error: %+v", st)
+	}
+}
+
+func TestRenamedAuditFollowsLateWritesAndRestart(t *testing.T) {
+	store, _ := newStore(t)
+	logPath := filepath.Join(t.TempDir(), "audit.log")
+	archive := logPath + ".rotated-test"
+	lines := fixtureLines(t)
+	appendFile(t, archive, lines[0]+"\n")
+	in := newIngester(t, logPath, store)
+	if err := in.PollArchives(); err != nil {
+		t.Fatal(err)
+	}
+	appendFile(t, archive, lines[1]+"\n")
+	restarted := newIngester(t, logPath, store)
+	if err := restarted.PollArchives(); err != nil {
+		t.Fatal(err)
+	}
+	if store.Stats().Stored != 2 {
+		t.Fatalf("late audit lost: %+v", store.Stats())
+	}
+	if err := restarted.PollArchives(); err != nil {
+		t.Fatal(err)
+	}
+	if store.Stats().Stored != 2 {
+		t.Fatal("archive replay duplicated events")
+	}
+}
+
 func TestIngestPartialLinesAndRestart(t *testing.T) {
 	store, _ := newStore(t)
 	if err := os.MkdirAll(filepath.Join(filepath.Dir(store.Dir()), "state"), 0o750); err != nil {
@@ -103,29 +149,6 @@ func TestIngestConcatenatedObjectsAndGarbage(t *testing.T) {
 	}
 	if got := store.Stats().Count; got != 3 {
 		t.Fatalf("expected 3 events around garbage, got %d", got)
-	}
-}
-
-func TestIngestTruncatesAfterFullIngestion(t *testing.T) {
-	store, _ := newStore(t)
-	logPath := filepath.Join(t.TempDir(), "audit.log")
-	lines := fixtureLines(t)
-	appendFile(t, logPath, lines[0]+"\n"+lines[1]+"\n")
-	in := newIngester(t, logPath, store)
-	in.MaxBytes = 10
-	if err := in.Poll(); err != nil {
-		t.Fatal(err)
-	}
-	fi, err := os.Stat(logPath)
-	if err != nil || fi.Size() != 0 || in.Status().Truncations != 1 || in.Status().Offset != 0 {
-		t.Fatalf("audit log must be truncated after ingestion: size=%v status=%+v", fi, in.Status())
-	}
-	appendFile(t, logPath, lines[2]+"\n")
-	if err := in.Poll(); err != nil {
-		t.Fatal(err)
-	}
-	if store.Stats().Count != 3 {
-		t.Fatal("records written after truncation must be ingested")
 	}
 }
 

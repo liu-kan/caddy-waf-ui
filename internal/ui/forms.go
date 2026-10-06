@@ -17,7 +17,7 @@ import (
 // POST on refresh.
 func redirectAfterForm(w http.ResponseWriter, r *http.Request, flash string) {
 	q := url.Values{}
-	for _, key := range []string{"tab", "domain", "search", "actionFilter"} {
+	for _, key := range []string{"tab", "domain", "search", "actionFilter", "tx", "node", "source", "ts"} {
 		if value := r.FormValue(key); value != "" {
 			q.Set(key, value)
 		}
@@ -72,6 +72,10 @@ func HandleFormAddExclusion(w http.ResponseWriter, r *http.Request) {
 	domainName := r.PathValue("domain")
 	_ = r.ParseForm()
 	exclusion, form := exclusionFromRequest(r)
+	if form.Expires != "" && exclusion.Expires.IsZero() {
+		renderTab(w, r, "exclusions", domainName, func(d *pageData) { d.FormError = "Invalid expiry: use a UTC date and time"; d.ExclusionForm = form })
+		return
+	}
 
 	current, err := readExclusions(domainName)
 	if err != nil {
@@ -90,7 +94,7 @@ func HandleFormAddExclusion(w http.ResponseWriter, r *http.Request) {
 		previewExclusions(w, r, domainName, form, exclusion, merged)
 		return
 	}
-	if err := service.ApplyExclusions(actor(r, form.Reason), domainName, merged); err != nil {
+	if err := service.ApplyExclusionsDraft(actor(r, form.Reason), domainName, merged, r.FormValue("draft_id")); err != nil {
 		redirectAfterForm(w, r, "error")
 		return
 	}
