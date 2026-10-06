@@ -53,6 +53,9 @@ type Ingester struct {
 	Norm           *Normalizer
 	CloudStore     *Store
 	CloudRedaction Redaction
+	// ArchiveRetention keeps rotated raw archives after their last write
+	// (at least MinArchiveRetention) for on-demand local match context.
+	ArchiveRetention time.Duration
 	// ChunkSize bounds the bytes read per poll.
 	ChunkSize int64
 

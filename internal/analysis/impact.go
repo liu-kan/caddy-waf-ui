@@ -2,6 +2,7 @@ package analysis
 
 import (
 	"fmt"
+	"net/netip"
 	"path"
 	"regexp"
 	"sort"
@@ -18,6 +19,8 @@ type Change struct {
 	Exclusions []waf.Exclusion
 	Policy     *waf.Policy
 	Mode       string
+	// Member reports IP group membership for the policy's group rules.
+	Member func(group string, ip netip.Addr) bool
 }
 
 // Outcomes of the score model.
@@ -88,7 +91,7 @@ func Estimate(evs []*events.Event, profiles []SourceProfile, dict *crs.Dictionar
 			mode = e.Engine
 		}
 		recorded := recordedOutcome(e)
-		if model := evaluate(e, bpl, in, out, mode, nil, dict); model != recorded {
+		if model := evaluate(e, bpl, in, out, mode, nil, dict, true); model != recorded {
 			mismatch++
 		}
 		nbpl, nin, nout, nmode := bpl, in, out, mode
@@ -121,7 +124,15 @@ func Estimate(evs []*events.Event, profiles []SourceProfile, dict *crs.Dictionar
 				}
 			}
 		}
-		next := evaluate(e, nbpl, nin, nout, nmode, matchers, dict)
+		next := ""
+		if change.Policy != nil && change.Member != nil {
+			next, nbpl, nin, nout, nmode = applyGroups(e, change.Policy.Normalize(), change.Member, nbpl, nin, nout, nmode)
+		}
+		if next == "" {
+			// Recorded group-rule hits belong to the old policy; the new
+			// policy's group rules were applied above.
+			next = evaluate(e, nbpl, nin, nout, nmode, matchers, dict, false)
+		}
 		if next == recorded {
 			continue
 		}
@@ -170,7 +181,52 @@ func Estimate(evs []*events.Event, profiles []SourceProfile, dict *crs.Dictionar
 	if unknownTags > 0 {
 		im.Caveats = append(im.Caveats, "tag exclusions cannot be evaluated for rules outside the dictionary (custom rules)")
 	}
+	if change.Policy != nil && len(change.Policy.IPGroups) > 0 {
+		blocks := false
+		for _, g := range change.Policy.IPGroups {
+			blocks = blocks || g.Action == waf.GroupBlock
+		}
+		switch {
+		case change.Member == nil:
+			im.Caveats = append(im.Caveats, "IP group rules cannot be estimated without the group lists")
+		case blocks:
+			im.Caveats = append(im.Caveats, "IP group block rules apply to every request of a group, but the history only holds audited requests: add the rule as trial first to record the traffic it would block")
+		}
+	}
 	return im
+}
+
+// applyGroups applies the policy's IP group rules to one event in order.
+// It returns a forced outcome for a block rule, or the parameters that the
+// engine and tuning rules leave for the score model.
+func applyGroups(e *events.Event, p waf.Policy, member func(string, netip.Addr) bool, bpl, in, out int, mode string) (string, int, int, int, string) {
+	ip, err := netip.ParseAddr(e.ClientIP)
+	if err != nil {
+		return "", bpl, in, out, mode
+	}
+	for _, g := range p.IPGroups {
+		if strings.EqualFold(mode, "off") {
+			break
+		}
+		if member(g.Group, ip) == g.Negate {
+			continue
+		}
+		switch g.Action {
+		case waf.GroupBlock:
+			if strings.EqualFold(mode, "on") {
+				return OutcomeBlocked, bpl, in, out, mode
+			}
+			return OutcomeWouldBlock, bpl, in, out, mode
+		case waf.GroupEngine:
+			mode = g.Engine
+		case waf.GroupTune:
+			bpl, _, in, out = g.Effective(p)
+		}
+	}
+	if strings.EqualFold(mode, "off") {
+		return OutcomePass, bpl, in, out, mode
+	}
+	return "", bpl, in, out, mode
 }
 
 func recordedOutcome(e *events.Event) string {
@@ -184,11 +240,21 @@ func recordedOutcome(e *events.Event) string {
 }
 
 // evaluate applies the CRS anomaly-scoring decision to the recorded hits.
-func evaluate(e *events.Event, bpl, in, out int, mode string, matchers []exclusionMatcher, dict *crs.Dictionary) string {
+// recordedGroups counts the IP group rules recorded with the event; a new
+// policy replaces them with its own group rules (applyGroups).
+func evaluate(e *events.Event, bpl, in, out int, mode string, matchers []exclusionMatcher, dict *crs.Dictionary, recordedGroups bool) string {
 	scoreIn, scoreOut := 0, 0
 	direct := false
 	for _, h := range e.Hits {
 		if excluded(h, e, matchers, dict) {
+			continue
+		}
+		if h.ID >= crs.UIGroupBlockMin && h.ID <= crs.UIGroupControlMax {
+			// Trial rules record without blocking; tuning was applied to the
+			// recorded thresholds by the normalizer.
+			if recordedGroups && h.ID <= crs.UIGroupBlockMax && !strings.Contains(h.Msg, "(trial)") {
+				direct = true
+			}
 			continue
 		}
 		switch h.Kind {
@@ -372,7 +438,7 @@ func Suggest(e *events.Event, window []*events.Event, profiles []SourceProfile, 
 			suggestions = append(suggestions, s)
 		}
 	}
-	clears := evaluate(e, bpl, thrIn, thrOut, "on", compileExclusions(narrowest), dict) == OutcomePass
+	clears := evaluate(e, bpl, thrIn, thrOut, "on", compileExclusions(narrowest), dict, true) == OutcomePass
 	for i := range suggestions {
 		suggestions[i].ClearsEvent = clears
 	}

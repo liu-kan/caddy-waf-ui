@@ -183,3 +183,16 @@ func TestStricterRedactionIsMonotonic(t *testing.T) {
 		t.Fatalf("a less strict policy cannot relabel already redacted data: %q", got.Redaction)
 	}
 }
+
+func TestMultipartBodyRedaction(t *testing.T) {
+	body := "--b\r\nContent-Disposition: form-data; name=\"password\"\r\n\r\nhunter2\r\n--b--"
+	for _, p := range []Redaction{{Level: LevelStrict}, {Level: LevelStandard}, {Level: LevelFull, Hide: []string{"password"}}} {
+		e := p.Apply(&Event{Hits: []Hit{{Var: "REQUEST_BODY", Data: "hunter2", Value: body}}})
+		if h := e.Hits[0]; h.Value != redacted || h.Data != redacted {
+			t.Fatalf("%s (hide %v) must hide a multipart body whose parts cannot be classified by name: %+v", p.Level, p.Hide, h)
+		}
+	}
+	if e := (Redaction{Level: LevelFull}).Apply(&Event{Hits: []Hit{{Var: "REQUEST_BODY", Value: body}}}); e.Hits[0].Value != body {
+		t.Fatalf("full without a hide list keeps the multipart body: %q", e.Hits[0].Value)
+	}
+}

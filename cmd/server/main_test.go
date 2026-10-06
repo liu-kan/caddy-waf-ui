@@ -3,8 +3,16 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/developmi/caddy-waf-ui/internal/events"
+	"github.com/developmi/caddy-waf-ui/internal/ipgroups"
+	"github.com/developmi/caddy-waf-ui/internal/metrics"
+	"github.com/developmi/caddy-waf-ui/internal/service"
 )
 
 // TestNewServerBounds (SH-1): the newServer constructor must set the four
@@ -127,5 +135,57 @@ func TestInvalidPrivacySettingsPreventStartup(t *testing.T) {
 	called := false
 	if err := run(func(*http.Server) error { called = true; return nil }); err == nil || called {
 		t.Fatal("invalid privacy configuration silently started")
+	}
+}
+
+func TestExportQueueCanBeDisabled(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CADDY_UI_DATA_DIR", dir)
+	store, err := events.OpenStore(filepath.Join(dir, "events"), time.Hour, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := events.RedactionSettings{Local: events.Redaction{Level: events.LevelStandard}}
+	t.Setenv("CADDY_UI_CLOUD_EXPORT", "true")
+	cloud, err := openExportQueue(store, settings, time.Hour)
+	if err != nil || cloud == nil {
+		t.Fatalf("export queue: %v", err)
+	}
+	marker := filepath.Join(dir, "cloud", "bootstrap.done")
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatal("the first export start must record the migration")
+	}
+	t.Setenv("CADDY_UI_CLOUD_EXPORT", "false")
+	if cloud, err := openExportQueue(store, settings, time.Hour); err != nil || cloud != nil {
+		t.Fatalf("disabled export must not open a queue: %v %v", cloud, err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatal("disabling export must reset the migration so re-enabling queues retained events again")
+	}
+}
+
+func TestIPGroupGauges(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "office.txt"), []byte("192.0.2.0/24\n198.51.100.0/24\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	reg, err := ipgroups.Open(ipgroups.Options{StateDir: filepath.Join(dir, "state"), ListDir: filepath.Join(dir, "lists"), CaddyDir: "/lists", SourceDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reg.Put(t.Context(), ipgroups.Definition{Name: "office", Source: ipgroups.SourceFile, File: "office.txt"}); err != nil {
+		t.Fatal(err)
+	}
+	service.SetIPGroups(reg)
+	t.Cleanup(func() { service.SetIPGroups(nil) })
+	ipGroupGauges.Do(registerIPGroupGauges)
+	var out strings.Builder
+	if err := metrics.Default.Render(&out); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`waf_ipgroup_prefixes{group="office"} 2`, `waf_ipgroup_error{group="office"} 0`, `waf_ipgroup_pending{group="office"} 0`} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("metrics miss %q:\n%s", want, out.String())
+		}
 	}
 }

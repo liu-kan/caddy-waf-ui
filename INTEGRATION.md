@@ -47,6 +47,9 @@ Caddy's DHI runtime and the UI both run as UID/GID 65532. Runtime UI permissions
 | Caddy config | `/config:rw` | Not mounted |
 | Admin socket | `/run/caddy-admin:rw` | `/run/caddy-admin:ro` |
 | Operator rules | `/etc/caddy/waf-custom:ro` | `/etc/caddy/waf-custom:ro` |
+| IP group sources (optional) | None | `/ipgroups:ro` (`CADDY_UI_IPGROUP_DIR`) |
+
+IP group lists are written by the UI into the managed overlay volume (`ipgroups/` subdirectory), which Caddy already mounts read-only; no Caddy change is needed. URL sources are downloaded by the UI over HTTPS, through `CADDY_UI_IPGROUP_PROXY` when set.
 
 `runtime-init` runs once as root with only CHOWN/FOWNER/DAC_OVERRIDE capabilities. It prepares volume roots and migrates only UI-owned overlays/backups from their old UID, setting 0750 directories and 0640 files. It does not recursively chown certificate data or application/access logs. The regular Caddy and UI containers drop all capabilities except Caddy's NET_BIND_SERVICE.
 

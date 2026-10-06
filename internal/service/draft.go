@@ -48,6 +48,9 @@ func baselineHash(site string) (string, error) {
 		_, _ = fmt.Fprintf(h, "%d:%s:%d:", len(path), path, len(b))
 		h.Write(b)
 	}
+	// Group rules render the active list files: a refreshed list makes the
+	// reviewed artifact stale.
+	_, _ = fmt.Fprintf(h, "ipgroups:%s", groupDigest())
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 func saveDraft(site, kind string, o wafOverride) (Preview, error) {

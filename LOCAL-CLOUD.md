@@ -58,6 +58,8 @@ For an existing deployment, merge the sidecar/data/init/Alloy entries following 
 | Runtime | Timestamp, level, logger | Diagnostic message text |
 | Change | Site, action, result, revision, SHA256, stage names/results | Actor, reason, error text, diff, draft contents and feedback |
 
+Set `CADDY_UI_CLOUD_EXPORT=false` when nothing ships to Grafana Cloud: the UI then stops writing the export queue. Turning it back on queues the retained local events again (the queue deduplicates by node and transaction).
+
 Loki indexes bounded labels: job/kind and, where appropriate, managed site, action, node, result or level. IPs, paths, transaction IDs and rule IDs remain JSON fields. Arbitrary access Host headers are not indexed. `imported-*.jsonl` is never shipped again. Cloud history expects this normalized `kind="event"` schema, not arbitrary legacy Caddy/Coraza log formats.
 
 Coraza's `RelevantOnly` engine writes every response whose status matches the baseline `SecAuditLogRelevantStatus` (400–419, 500–519), including upstream 404/401/5xx responses without any rule match. The UI skips records without rule matches, so they never become events or cloud data; they only use raw-log disk space until rotation.

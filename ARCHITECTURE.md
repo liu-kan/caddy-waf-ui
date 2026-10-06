@@ -10,6 +10,7 @@ The stdlib-only Go sidecar manages configuration alongside the existing caddy-wi
 - `internal/files`, `internal/domain`, `internal/iprules`: atomic files, typed backups, site discovery and validated client-IP lists.
 - `internal/events`: audit normalization/redaction, restartable cursors, daily JSONL files, compact disk-offset index, bounded event cache, retained-file queries, rollups and direct paginated Loki queries.
 - `internal/crs`, `internal/analysis`: versioned rule dictionary/source notes, CSV lookup, match/score explanations, bounded retrospective analysis and approximate impact estimates.
+- `internal/ipgroups`: named IP lists from sing-box rule-sets (`.srs`/JSON) or CIDR lists, file or HTTPS sources, content-addressed list files, shrink guard and periodic import.
 - `internal/feedback`, `internal/journal`: local operator decisions and staged change evidence.
 - `internal/ui`, `internal/auth`, `internal/ratelimit`: embedded server-rendered pages, API, cookie/bearer authentication, CSRF and request limits.
 - `alloy`: allowlisted WAF/access/runtime/change streams; optional metrics collection with a series budget.
@@ -30,7 +31,9 @@ WAF and exclusion snapshots are independent. WAF rollback restores the snapshot'
 
 Caddy and UI share UID/GID 65532. Caddy reads managed overlays; UI writes them. Caddy/UI alone mount the Admin socket. The UI sees the audit directory read-write for rename/reopen rotation, not the certificate-bearing `/data` volume. A dedicated internal network permits origin probes; telemetry cloud egress uses the UI network. Alloy has no Docker/Admin socket, reads event/log files and writes only its own position directory.
 
-`/ui-data/events/events-*.jsonl` are local normalized events; Alloy reads only independently redacted copies in `/ui-data/cloud/events/events-*.jsonl`; `imported-*.jsonl` are optional local copies that are never re-sent. Normal cloud viewing queries Loki directly and does not import the whole retention window. Restart rebuilds the retained index and day counters from durable events. Records without any rule match are skipped: Coraza's `RelevantOnly` engine also logs 4xx/5xx responses through the baseline `SecAuditLogRelevantStatus`, which are not WAF events. Disk-full errors stop the raw cursor. Rotation preserves renamed archives and separate cursors for late records, with a 48-hour grace period before deletion after EOF.
+`/ui-data/events/events-*.jsonl` are local normalized events; Alloy reads only independently redacted copies in `/ui-data/cloud/events/events-*.jsonl`; `imported-*.jsonl` are optional local copies that are never re-sent. Normal cloud viewing queries Loki directly and does not import the whole retention window. Restart rebuilds the retained index and day counters from durable events. Records without any rule match are skipped: Coraza's `RelevantOnly` engine also logs 4xx/5xx responses through the baseline `SecAuditLogRelevantStatus`, which are not WAF events. Disk-full errors stop the raw cursor. Rotation preserves renamed archives and separate cursors for late records; archives are deleted after EOF once `CADDY_UI_AUDIT_ARCHIVE_HOURS` (at least 48) has passed since their last write.
+
+IP group state lives in `/ui-data/ipgroups/groups.json`. Active lists are written to the managed volume as `ipgroups/<name>.<sha256-prefix>.txt`; overlays reference them with `@ipMatchFromFile`, so a list change publishes new overlay text (and a new Coraza instance) to the sites that use the group, and older files stay until no overlay references them. Reviewed drafts include the active list digest in their baseline.
 
 ## Limits
 

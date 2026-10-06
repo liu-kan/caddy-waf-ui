@@ -213,9 +213,8 @@ var (
 	// formPair is a key=value pair of a query string or form body; jsonPair
 	// a "key": value member of a JSON document.
 	formPair = regexp.MustCompile(`([A-Za-z0-9_.~%\[\]-]+)=([^&\s"]*)`)
-	// 2026-10-06 08:58: exclude '{', '[', and ':' from unquoted scalar values
-	// so opening braces of nested objects (e.g. "q":{"password":...}) are not
-	// eaten greedily, allowing inner sensitive keys to be caught by regex.
+	// Unquoted scalars stop at '{', '[' and ':' so a nested object such as
+	// "q":{"password":...} is not consumed as the value of "q".
 	jsonPair = regexp.MustCompile(`"([^"\\]{1,128})"(\s*:\s*)("(?:[^"\\]|\\.)*"?|[^,{}\[\]:\s]+)`)
 )
 
@@ -232,9 +231,9 @@ func (r Redaction) pairs(s string) string {
 		dec := json.NewDecoder(strings.NewReader(s))
 		dec.UseNumber()
 		if dec.Decode(&value) == nil {
-			// 2026-10-06 08:50: an unchanged document is kept as is, and a
-			// changed one is encoded without HTML escaping, so XSS payloads such
-			// as <script> stay readable instead of becoming \u003cscript\u003e.
+			// An unchanged document is kept as is, and a changed one is
+			// encoded without HTML escaping, so XSS payloads such as <script>
+			// stay readable instead of becoming \u003cscript\u003e.
 			// Never return early here: duplicate JSON members or shadowed keys
 			// lost during map decoding must still be caught by jsonPair below.
 			if r.jsonValue(value, "", 0) {
@@ -336,8 +335,8 @@ func (r Redaction) uri(s string) string {
 	return u.String()
 }
 
-// rawURI handles URIs that url.Parse rejects. 2026-10-06 08:50: invalid
-// escapes (%zz, %u0027) and control bytes are typical of attack payloads,
+// rawURI handles URIs that url.Parse rejects. Invalid escapes (%zz,
+// %u0027) and control bytes are typical of attack payloads,
 // so hiding the whole URI at standard removed the evidence needed to judge
 // a match. Query and fragment pairs still follow the policy, and userinfo
 // is hidden whenever the URL form would hide its password.
@@ -431,9 +430,15 @@ func (r Redaction) hit(h *Hit) {
 				h.Value = redacted
 			}
 		default:
-			if r.Level < LevelFull && !json.Valid([]byte(h.Value)) && !strings.Contains(h.Value, "=") {
+			// Multipart parts are named in their headers, not as pairs, so
+			// like XML a multipart body is kept only at full without a hide
+			// list.
+			switch {
+			case multipartBody(h.Value) && (r.Level < LevelFull || len(r.Hide) > 0):
 				h.Value = redacted
-			} else {
+			case r.Level < LevelFull && !json.Valid([]byte(h.Value)) && !strings.Contains(h.Value, "="):
+				h.Value = redacted
+			default:
 				h.Value = r.pairs(h.Value)
 			}
 		}
@@ -447,6 +452,11 @@ func (r Redaction) hit(h *Hit) {
 			hide()
 		}
 	}
+}
+
+// multipartBody reports whether a body excerpt holds multipart parts.
+func multipartBody(s string) bool {
+	return strings.Contains(strings.ToLower(s), "content-disposition:")
 }
 
 // URI applies the same policy to the legacy local audit viewer.

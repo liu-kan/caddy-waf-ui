@@ -3,13 +3,14 @@ package ui
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/developmi/caddy-waf-ui/internal/waf"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/developmi/caddy-waf-ui/internal/waf"
 )
 
 // liveServers mirrors Caddy's GET /config/apps/http/servers for the fixture

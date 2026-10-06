@@ -1,0 +1,130 @@
+{{define "content"}}
+<div class="top-banner">
+  <div class="u-flex u-between u-wrap u-gap-lg">
+    <div>
+      <h1 class="banner-title banner-title-base">🧭 IP Groups</h1>
+      <p class="banner-sub">
+        Named IP lists imported from sing-box rule-sets (binary <code>.srs</code> or JSON source) or plain CIDR lists,
+        read from <code>{{ .IPGroupDir }}</code> or downloaded over HTTPS on a schedule. Use them in the IP group rules of
+        <a href="/?tab=policy">Policy</a> to block, trial, switch the rule engine or change thresholds per group.
+        Only <code>ip_cidr</code>/<code>source_ip_cidr</code> rules are used; domain, port and process rules are skipped.
+        A list holds at most {{ .IPGroupMax }} prefixes.
+      </p>
+    </div>
+    <form method="GET" action="/" class="domain-select-form">
+      <input type="hidden" name="tab" value="ipgroups">
+      <label class="domain-select-label" for="lookup-ip">Which groups hold</label>
+      <input type="text" id="lookup-ip" name="ip" value="{{ .LookupIP }}" placeholder="203.0.113.7" class="filter-input u-mono">
+      <button type="submit" class="secondary btn-compact">Look up</button>
+    </form>
+  </div>
+  {{ if .LookupError }}<p class="u-text-danger">{{ .LookupError }}</p>{{ end }}
+  {{ if .LookupDone }}<p>{{ .LookupIP }} belongs to {{ range .LookupGroups }}<code>{{ . }}</code> {{ else }}no group{{ end }}.</p>{{ end }}
+</div>
+
+{{ if .FormError }}
+<div class="toast-notice toast-notice--error" role="alert"><span>⚠️ {{ .FormError }}</span></div>
+{{ end }}
+
+{{ if not .IPGroupsReady }}
+<div class="card-box card-box--padded">
+  <p class="card-box-empty">IP groups are not available: their state could not be read. Check the service logs.</p>
+</div>
+{{ else }}
+<div class="card-box">
+  <div class="card-box-header"><div><h2 class="card-title">Groups ({{ len .IPGroupViews }})</h2>
+    <small class="u-text-faint">File sources are checked every minute; URL sources at their interval (retried after 15 minutes on failure). A list that loses more than half of its prefixes waits for approval.</small></div></div>
+  <div class="table-scroll">
+    <table class="table-compact u-text-md">
+      <thead><tr><th scope="col">Group</th><th scope="col">Source</th><th scope="col">Active list</th><th scope="col">Status</th><th scope="col">Used by</th><th scope="col"></th></tr></thead>
+      <tbody>
+        {{ range .IPGroupViews }}
+          <tr>
+            <td><strong class="u-mono">{{ .Name }}</strong>{{ if .Note }}<div class="u-text-sm u-text-faint">{{ .Note }}</div>{{ end }}</td>
+            <td class="cell-uri u-text-sm">{{ if eq .Source "url" }}<code>{{ .URL }}</code><div class="u-text-faint">every {{ .Refresh }}</div>{{ else }}file <code>{{ .File }}</code>{{ end }}</td>
+            <td class="u-text-sm">
+              {{ with .Active }}{{ .Prefixes }} {{ if eq .Prefixes 1 }}prefix{{ else }}prefixes{{ end }} ({{ .IPv4 }} IPv4, {{ .IPv6 }} IPv6) · {{ .Format }}{{ if .Skipped }} · {{ .Skipped }} non-IP rule(s) skipped{{ end }}
+                <div class="u-text-faint">imported {{ date .Imported "2006-01-02 15:04" }} UTC · <code title="{{ .SHA256 }}">{{ slice .SHA256 0 12 }}</code></div>
+              {{ else }}<span class="u-text-amber">no list yet</span>{{ end }}
+            </td>
+            <td class="u-text-sm">
+              {{ if not .Checked.IsZero }}checked {{ date .Checked "2006-01-02 15:04" }} UTC{{ end }}
+              {{ if .Error }}<div class="u-text-danger">{{ .Error }}</div>{{ end }}
+              {{ if .Hold }}
+                <div class="u-text-amber">{{ .Hold }}</div>
+                <form method="POST" action="/ipgroups/{{ .Name }}/approve" class="m-0 u-inline-block" data-confirm="Use the held list of {{ .Name }} ({{ .Pending.Prefixes }} prefixes)?">
+                  <input type="hidden" name="csrf" value="{{ $.CSRF }}"><input type="hidden" name="tab" value="ipgroups"><input type="hidden" name="reason" value="approved held update">
+                  <button type="submit" class="secondary outline btn-mini">Approve</button>
+                </form>
+                <form method="POST" action="/ipgroups/{{ .Name }}/discard" class="m-0 u-inline-block">
+                  <input type="hidden" name="csrf" value="{{ $.CSRF }}"><input type="hidden" name="tab" value="ipgroups"><input type="hidden" name="reason" value="discarded held update">
+                  <button type="submit" class="secondary outline btn-mini">Discard</button>
+                </form>
+              {{ end }}
+            </td>
+            <td class="u-text-sm">
+              {{ range .Sites }}<a href="/?tab=policy&amp;domain={{ . }}" class="u-mono">{{ . }}</a> {{ else }}<span class="u-text-faint">no policy</span>{{ end }}
+              {{ if .Stale }}
+                <div class="u-text-amber">Still loading an older list: {{ range .Stale }}<code>{{ . }}</code> {{ end }}</div>
+                <form method="POST" action="/ipgroups/{{ .Name }}/publish" class="m-0">
+                  <input type="hidden" name="csrf" value="{{ $.CSRF }}"><input type="hidden" name="tab" value="ipgroups"><input type="hidden" name="reason" value="publish the active list">
+                  <button type="submit" class="secondary outline btn-mini">Publish again</button>
+                </form>
+              {{ end }}
+            </td>
+            <td class="u-text-right">
+              <form method="POST" action="/ipgroups/{{ .Name }}/refresh" class="m-0 u-inline-block">
+                <input type="hidden" name="csrf" value="{{ $.CSRF }}"><input type="hidden" name="tab" value="ipgroups"><input type="hidden" name="reason" value="manual refresh">
+                <button type="submit" class="secondary outline btn-mini">Refresh now</button>
+              </form>
+              <a href="/?tab=ipgroups&amp;edit={{ .Name }}" class="btn-link">Edit</a>
+              <form method="POST" action="/ipgroups/{{ .Name }}/delete" class="m-0 u-inline-block" data-confirm="Delete IP group {{ .Name }}?">
+                <input type="hidden" name="csrf" value="{{ $.CSRF }}"><input type="hidden" name="tab" value="ipgroups"><input type="hidden" name="reason" value="deleted from the IP groups page">
+                <button type="submit" class="secondary outline btn-mini">Delete</button>
+              </form>
+            </td>
+          </tr>
+        {{ else }}
+          <tr><td colspan="6" class="table-empty">No IP groups yet.</td></tr>
+        {{ end }}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<form method="POST" action="/ipgroups" class="card-box card-box--padded">
+  <h2 class="card-title card-title-spaced">{{ if .IPGroupForm.Name }}Update group {{ .IPGroupForm.Name }}{{ else }}Add a group{{ end }}</h2>
+  <input type="hidden" name="csrf" value="{{ .CSRF }}">
+  <input type="hidden" name="tab" value="ipgroups">
+  <div class="grid">
+    <label>Name (1-32 lowercase letters, digits, - or _)
+      <input type="text" name="name" value="{{ .IPGroupForm.Name }}" placeholder="geoip-cn" required class="u-mono">
+    </label>
+    <label>Source
+      <select name="source">
+        <option value="url" {{ if eq .IPGroupForm.Source "url" }}selected{{ end }}>HTTPS URL, downloaded periodically</option>
+        <option value="file" {{ if eq .IPGroupForm.Source "file" }}selected{{ end }}>File in {{ .IPGroupDir }}</option>
+      </select>
+    </label>
+  </div>
+  <div class="grid">
+    <label>URL (https only)
+      <input type="text" name="url" value="{{ .IPGroupForm.URL }}" placeholder="https://example.com/rule-set/geoip-cn.srs" class="u-mono">
+    </label>
+    <label>Refresh interval (1h-720h)
+      <input type="text" name="refresh" value="{{ .IPGroupForm.Refresh }}" placeholder="24h" class="u-mono">
+    </label>
+    <label>File name
+      <input type="text" name="file" value="{{ .IPGroupForm.File }}" placeholder="office.txt" class="u-mono">
+    </label>
+  </div>
+  <label>Note
+    <input type="text" name="note" value="{{ .IPGroupForm.Note }}" maxlength="200" placeholder="mainland China, sing-geoip">
+  </label>
+  <label>Reason (recorded in the change history)
+    <input type="text" name="reason" maxlength="500" placeholder="restrict the admin site to office addresses">
+  </label>
+  <button type="submit">Save and import</button>
+</form>
+{{ end }}
+{{end}}

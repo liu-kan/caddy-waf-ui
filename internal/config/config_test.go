@@ -105,3 +105,20 @@ func TestBackupKeepInvalidValues(t *testing.T) {
 		})
 	}
 }
+
+func TestArchiveRetentionAndCloudExport(t *testing.T) {
+	t.Setenv("CADDY_UI_AUDIT_ARCHIVE_HOURS", "")
+	t.Setenv("CADDY_UI_CLOUD_EXPORT", "")
+	if config.AuditArchiveHours() != 48 || !config.CloudExport() {
+		t.Fatalf("defaults: %d hours, export %v", config.AuditArchiveHours(), config.CloudExport())
+	}
+	t.Setenv("CADDY_UI_AUDIT_ARCHIVE_HOURS", "12")
+	if config.AuditArchiveHours() != 48 {
+		t.Fatal("archives must be kept at least 48 hours for late records")
+	}
+	t.Setenv("CADDY_UI_AUDIT_ARCHIVE_HOURS", "336")
+	t.Setenv("CADDY_UI_CLOUD_EXPORT", "false")
+	if config.AuditArchiveHours() != 336 || config.CloudExport() {
+		t.Fatalf("overrides: %d hours, export %v", config.AuditArchiveHours(), config.CloudExport())
+	}
+}

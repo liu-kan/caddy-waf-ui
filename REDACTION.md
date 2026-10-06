@@ -28,6 +28,8 @@ The Compose fallback is strict for both destinations; `.env.example` explicitly 
 
 Full is an explicit choice to retain collected credential material. It still uses bounded excerpts: match data 160 bytes, value 200 bytes, query 1,024 bytes, at most 40 headers with 256-byte values. It does not enable request/response-body logging. `CADDY_UI_AUDIT_LOG_PARTS=AHKZ` omits headers; use `ABHKZ` only if you want to collect them in the raw local audit log. A redaction level cannot recover a field that Coraza did not record.
 
+Multipart bodies name their parts in part headers, not as pairs, so standard and strict hide them whole. Full keeps them only without a hide list, since a hide entry cannot be matched to a part; XML bodies follow the same rule.
+
 Standard is a name-based diagnostic filter, not a general detector of every secret embedded in arbitrary prose. Names such as password, access_token, Authorization, Cookie and apiKey are recognized. Ordinary names such as max_tokens and author are not mistaken for credentials. URI credentials, structured JSON (including escaped keys and object/array values), and named form values are masked. If a composite value is masked, its matched fragment is hidden too, so the fragment cannot reveal the removed credential. Unknown/opaque data is conservative under standard; inspect it locally with an explicitly selected full policy when necessary.
 
 The cloud level is capped at the local level. Requesting cloud full while local standard produces effective cloud standard. Querying an older full event under current local strict also yields a strict view. This filtering does not rewrite the underlying retained files.
@@ -52,11 +54,13 @@ For example, `hide=password keep=password` still hides it. `keep=pass_rate` perm
 5. On first upgrade, retained local events are migrated to the cloud queue without re-exporting imported history. A durable marker and node/transaction deduplication make interrupted migration retryable.
 6. Local and export writes must both succeed before the raw cursor advances. Export-disk failure leaves the cursor at the record; retry uses its existing retained local representation, not more detailed raw input. Both stores have independent disk ceilings, and the export cache holds one full event.
 
+Deployments that never ship to Grafana Cloud can set `CADDY_UI_CLOUD_EXPORT=false`: no export copy is written. Re-enabling export queues the retained local events again under the cloud policy; the queue deduplicates node/transaction identities, so nothing is sent twice.
+
 The cloud queue defaults to the same 14-day retention and a separate 128 MiB ceiling. Local normalized retention has its own 128 MiB ceiling. Raw audit archives, rollups, backups, drafts and Alloy positions are additional disk use. Export counts describe retained queue records, not unacknowledged deliveries: Alloy owns delivery positions, and no infinite-outage lossless guarantee is made.
 
 ## Local viewing and historical data
 
-The event page, API event/detail/explain endpoints, legacy Raw Audit Log page and on-demand local match lookup follow the current local policy. The raw lookup does not bypass strict and never writes or uploads its response. It supports compact/formatted/concatenated JSON, checks event identity/clock/Host, and limits scans to one at a time, five seconds, 64 MiB total and 8 MiB per record. Sensitive UI/API responses use Cache-Control: no-store.
+The event page, API event/detail/explain endpoints, legacy Raw Audit Log page and on-demand local match lookup follow the current local policy. The raw lookup does not bypass strict and never writes or uploads its response. It supports compact/formatted/concatenated JSON, checks event identity/clock/Host, and selects the raw file by the event time (the live log or the archive rotated after the event, at most 256 MiB scanned per selected file); without a usable time it falls back to a newest-first scan of at most 64 MiB. Scans run one at a time, for at most five seconds, with 8 MiB per record. Raw archives stay available for `CADDY_UI_AUDIT_ARCHIVE_HOURS` after their last write (default and minimum 48); trusted environments can raise it for a longer forensic window at the cost of disk space. Sensitive UI/API responses use Cache-Control: no-store.
 
 Changing levels affects newly collected events and the current view. It does not recover removed fields, rewrite raw/retained/queued records, or delete already uploaded cloud history. Previously queued records keep the policy chosen when they were created; changing from full to strict does not retroactively erase them. Address existing retained/queued/cloud material separately if reducing a previously permissive policy.
 

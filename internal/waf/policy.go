@@ -29,6 +29,8 @@ type Policy struct {
 	AllowedContentTypes []string `json:"allowed_content_types,omitempty"`
 	RequestBodyLimit    int64    `json:"request_body_limit,omitempty"`
 	DisabledGroups      []string `json:"disabled_groups,omitempty"`
+	// IPGroups are per-client rules for IP groups, applied in order.
+	IPGroups []IPGroupRule `json:"ip_groups,omitempty"`
 }
 
 // CRS defaults (REQUEST-901-INITIALIZATION).
@@ -76,6 +78,16 @@ func (p Policy) Normalize() Policy {
 	p.AllowedMethods = canonicalList(p.AllowedMethods, strings.ToUpper)
 	p.AllowedContentTypes = canonicalList(p.AllowedContentTypes, strings.ToLower)
 	p.DisabledGroups = canonicalList(p.DisabledGroups, strings.TrimSpace)
+	if len(p.IPGroups) == 0 {
+		p.IPGroups = nil
+	} else {
+		groups := make([]IPGroupRule, len(p.IPGroups))
+		for i, g := range p.IPGroups {
+			g.Group, g.Action, g.Engine, g.Note = strings.TrimSpace(g.Group), strings.TrimSpace(g.Action), strings.TrimSpace(g.Engine), strings.TrimSpace(g.Note)
+			groups[i] = g
+		}
+		p.IPGroups = groups
+	}
 	return p
 }
 
@@ -127,6 +139,14 @@ func (p Policy) Validate() error {
 	for _, g := range p.DisabledGroups {
 		if !allowed[g] {
 			return fmt.Errorf("rule group %q cannot be disabled", g)
+		}
+	}
+	if len(p.IPGroups) > MaxIPGroupRules {
+		return fmt.Errorf("at most %d IP group rules per site", MaxIPGroupRules)
+	}
+	for i, g := range p.IPGroups {
+		if err := validateGroupRule(g, p); err != nil {
+			return fmt.Errorf("IP group rule %d: %w", i+1, err)
 		}
 	}
 	return nil

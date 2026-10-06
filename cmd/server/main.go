@@ -20,6 +20,7 @@ import (
 	"github.com/developmi/caddy-waf-ui/internal/domain"
 	"github.com/developmi/caddy-waf-ui/internal/events"
 	"github.com/developmi/caddy-waf-ui/internal/files"
+	"github.com/developmi/caddy-waf-ui/internal/ipgroups"
 	"github.com/developmi/caddy-waf-ui/internal/logs"
 	"github.com/developmi/caddy-waf-ui/internal/metrics"
 	"github.com/developmi/caddy-waf-ui/internal/ratelimit"
@@ -75,16 +76,47 @@ func run(serve func(*http.Server) error) error {
 		return err
 	}
 
-	// 2. Event pipeline: storage failures keep configuration pages working.
+	// 2. IP groups before anything regenerates overlays (audit rotation).
+	stopGroups := startIPGroups()
+	defer stopGroups()
+
+	// 3. Event pipeline: storage failures keep configuration pages working.
 	stop := startPipeline()
 	defer stop()
 
-	// 3. Read the environment configuration for the listening port
+	// 4. Read the environment configuration for the listening port
 	bindAddr := config.BindAddr()
 
 	slog.Info("starting Caddy WAF UI", "bind", bindAddr)
 	srv := newServer(bindAddr, buildHandler())
 	return serve(srv)
+}
+
+// startIPGroups opens the IP group registry and starts the periodic import.
+// A registry failure is not fatal: policies that use groups then fail to
+// render, which the change journal reports.
+func startIPGroups() func() {
+	ipgroups.MaxPrefixes = config.IPGroupMaxPrefixes()
+	reg, err := ipgroups.Open(ipgroups.Options{
+		StateDir:  filepath.Join(config.DataDir(), "ipgroups"),
+		ListDir:   filepath.Join(config.ManagedDir(), "ipgroups"),
+		CaddyDir:  strings.TrimSuffix(config.IncludeDir(), "/") + "/ipgroups",
+		SourceDir: config.IPGroupDir(),
+		Proxy:     config.IPGroupProxy(),
+	})
+	if err != nil {
+		slog.Error("IP groups disabled: could not read their state", "error", err)
+		return func() {}
+	}
+	service.SetIPGroups(reg)
+	ipGroupGauges.Do(registerIPGroupGauges)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); service.RunIPGroups(ctx, time.Minute) }()
+	return func() {
+		cancel()
+		<-done
+	}
 }
 
 // startPipeline opens the event store, starts the audit log ingester and
@@ -128,36 +160,17 @@ func startPipeline() func() {
 	}
 	store.MaxDiskBytes = config.EventsDiskMaxBytes()
 	store.OnAdd = countEvent
-	cloud, err := events.OpenStore(filepath.Join(config.DataDir(), "cloud", "events"), retention, 1)
 	rt.Store = store
+	cloud, err := openExportQueue(store, settings, retention)
 	if err != nil {
-		slog.Error("WAF export queue unavailable", "error", err)
 		return disabledPipeline(rt, err)
 	}
-	cloud.MaxDiskBytes = config.CloudDiskMaxBytes()
 	rt.CloudStore = cloud
-	if err := cloud.Prune(time.Now().UTC()); err != nil {
-		slog.Error("could not prune export queue", "error", err)
-		return disabledPipeline(rt, err)
-	}
-	marker := filepath.Join(config.DataDir(), "cloud", "bootstrap.done")
-	if _, err := os.Stat(marker); errors.Is(err, os.ErrNotExist) {
-		if err := store.ExportRetained(cloud, settings.Cloud); err != nil {
-			slog.Error("pending event migration failed; ingestion disabled until corrected and restarted", "error", err)
-			return disabledPipeline(rt, err)
-		}
-		if err := files.AtomicWrite(marker, []byte(time.Now().UTC().Format(time.RFC3339Nano))); err != nil {
-			slog.Error("could not save export migration state", "error", err)
-			return disabledPipeline(rt, err)
-		}
-	} else if err != nil {
-		slog.Error("could not read export migration state", "error", err)
-		return disabledPipeline(rt, err)
-	}
 	ingester := &events.Ingester{
 		Path: config.AuditLogPath(), StatePath: filepath.Join(config.DataDir(), "state", "ingest.json"),
 		Store: store, CloudStore: cloud, CloudRedaction: settings.Cloud,
-		Norm: &events.Normalizer{Dict: dict, Node: config.NodeName(), Redaction: &settings.Local, SiteForHost: newSiteResolver().resolve},
+		ArchiveRetention: time.Duration(config.AuditArchiveHours()) * time.Hour,
+		Norm:             &events.Normalizer{Dict: dict, Node: config.NodeName(), Redaction: &settings.Local, SiteForHost: newSiteResolver().resolve},
 	}
 	rt.Ingester = ingester
 	registerGauges(rt)
@@ -166,7 +179,11 @@ func startPipeline() func() {
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() { defer wg.Done(); ingester.Run(ctx, config.IngestInterval()) }()
-	go func() { defer wg.Done(); maintain(ctx, store, cloud) }()
+	stores := []*events.Store{store}
+	if cloud != nil {
+		stores = append(stores, cloud)
+	}
+	go func() { defer wg.Done(); maintain(ctx, stores...) }()
 	if interval := config.LokiSyncInterval(); interval > 0 && rt.Loki.Configured() {
 		wg.Add(1)
 		go func() { defer wg.Done(); syncLoki(ctx, rt, interval) }()
@@ -174,12 +191,53 @@ func startPipeline() func() {
 	return func() {
 		cancel()
 		wg.Wait()
-		for _, s := range []*events.Store{store, cloud} {
+		for _, s := range stores {
 			if err := s.Rollups().Flush(); err != nil {
 				slog.Warn("could not flush event rollups", "error", err)
 			}
 		}
 	}
+}
+
+// openExportQueue opens the separately redacted queue that Alloy ships to
+// Grafana Cloud and, on the first start with export enabled, fills it with
+// the retained local events. It returns nil when CADDY_UI_CLOUD_EXPORT=false;
+// turning export back on later queues the retained history again (the queue
+// deduplicates, so nothing is sent twice).
+func openExportQueue(store *events.Store, settings events.RedactionSettings, retention time.Duration) (*events.Store, error) {
+	marker := filepath.Join(config.DataDir(), "cloud", "bootstrap.done")
+	if !config.CloudExport() {
+		if err := os.Remove(marker); err != nil && !errors.Is(err, os.ErrNotExist) {
+			slog.Error("could not reset export migration state", "error", err)
+			return nil, err
+		}
+		slog.Info("cloud export disabled: no event copy is queued for Alloy")
+		return nil, nil
+	}
+	cloud, err := events.OpenStore(filepath.Join(config.DataDir(), "cloud", "events"), retention, 1)
+	if err != nil {
+		slog.Error("WAF export queue unavailable", "error", err)
+		return nil, err
+	}
+	cloud.MaxDiskBytes = config.CloudDiskMaxBytes()
+	if err := cloud.Prune(time.Now().UTC()); err != nil {
+		slog.Error("could not prune export queue", "error", err)
+		return nil, err
+	}
+	if _, err := os.Stat(marker); errors.Is(err, os.ErrNotExist) {
+		if err := store.ExportRetained(cloud, settings.Cloud); err != nil {
+			slog.Error("pending event migration failed; ingestion disabled until corrected and restarted", "error", err)
+			return nil, err
+		}
+		if err := files.AtomicWrite(marker, []byte(time.Now().UTC().Format(time.RFC3339Nano))); err != nil {
+			slog.Error("could not save export migration state", "error", err)
+			return nil, err
+		}
+	} else if err != nil {
+		slog.Error("could not read export migration state", "error", err)
+		return nil, err
+	}
+	return cloud, nil
 }
 
 func disabledPipeline(rt *ui.Runtime, err error) func() {
@@ -300,6 +358,45 @@ func (s *siteResolver) resolve(host string) string {
 var gaugesOnce sync.Once
 
 // registerGauges exposes pipeline and policy state at scrape time.
+var ipGroupGauges sync.Once
+
+// registerIPGroupGauges exports the state of every IP group: list size,
+// last check, failed imports and updates waiting for approval.
+func registerIPGroupGauges() {
+	sample := func(value func(ipgroups.Group) float64) func() []metrics.Sample {
+		return func() []metrics.Sample {
+			reg := service.IPGroups()
+			if reg == nil {
+				return nil
+			}
+			var out []metrics.Sample
+			for _, g := range reg.Groups() {
+				out = append(out, metrics.Sample{Labels: []string{g.Name}, Value: value(g)})
+			}
+			return out
+		}
+	}
+	flag := func(on bool) float64 {
+		if on {
+			return 1
+		}
+		return 0
+	}
+	metrics.Default.NewGaugeFunc("waf_ipgroup_prefixes", "Prefixes of the active list of each IP group.", []string{"group"},
+		sample(func(g ipgroups.Group) float64 {
+			if g.Active == nil {
+				return 0
+			}
+			return float64(g.Active.Prefixes)
+		}))
+	metrics.Default.NewGaugeFunc("waf_ipgroup_checked_timestamp_seconds", "Last import check of each IP group (Unix time).", []string{"group"},
+		sample(func(g ipgroups.Group) float64 { return float64(g.Checked.Unix()) }))
+	metrics.Default.NewGaugeFunc("waf_ipgroup_error", "1 when the last import of an IP group failed.", []string{"group"},
+		sample(func(g ipgroups.Group) float64 { return flag(g.Error != "") }))
+	metrics.Default.NewGaugeFunc("waf_ipgroup_pending", "1 when an IP group update waits for approval.", []string{"group"},
+		sample(func(g ipgroups.Group) float64 { return flag(g.Pending != nil) }))
+}
+
 func registerGauges(rt *ui.Runtime) {
 	gaugesOnce.Do(func() { registerGaugesOnce(rt) })
 }

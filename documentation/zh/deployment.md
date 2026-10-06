@@ -53,7 +53,8 @@ Caddy（DHI 运行时）和 UI 都以 UID/GID 65532 运行。
 | 受管 overlay | `/etc/caddy/ui-managed:ro` | `/ui-managed:rw` | 不挂载 |
 | 自定义规则 | `/etc/caddy/waf-custom:ro` | `/etc/caddy/waf-custom:ro`（解释自定义规则编号；草稿预览后文件有变化则拒绝应用） | 不挂载 |
 | 备份 | 不挂载 | `/backups:rw` | 不挂载 |
-| UI 数据（事件、变更日志、草稿、游标） | 不挂载 | `/ui-data:rw` | `/ui-data:ro` |
+| UI 数据（事件、云端导出队列、变更日志、草稿、游标、IP 群组状态） | 不挂载 | `/ui-data:rw` | `/ui-data:ro`（只读取 `cloud/events/`、`changes/`） |
+| IP 群组来源文件（可选） | 不挂载 | `/ipgroups:ro`（Compose 中为宿主机 `./ipgroups`） | 不挂载 |
 | 审计与访问日志目录 | `/data/logs:rw` | `/data/logs:rw`（改名轮转） | `/caddy-logs:ro` |
 | 证书数据 `/data`、配置 `/config` | 读写 | 不挂载 | 不挂载 |
 | Admin socket | `/run/caddy-admin:rw` | `/run/caddy-admin:ro` | 不挂载 |

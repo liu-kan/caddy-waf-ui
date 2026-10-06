@@ -21,6 +21,7 @@
 | `iprules` | IP 规则变化 |
 | `rollback` | 恢复快照 |
 | `feedback` | 事件的人工判定，不改配置 |
+| `ipgroup` | IP 群组名单更新后，重新发布使用该群组的站点（每个站点一条）；群组本身的增删改、待定更新的批准与丢弃也以 `ipgroup` 记录，但不属于某个站点，只在 `GET /api/changes` 不带 `site` 时出现 |
 
 失败的尝试同样记录，带失败阶段和错误信息。启用 Grafana Cloud 时，这些记录以 `kind="change"` 上传，但只包含站点、动作、结果、revision、SHA256 和阶段结果，不含操作人、原因、错误和 diff，可用于 Grafana 注释。
 

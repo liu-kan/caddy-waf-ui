@@ -1,0 +1,11 @@
+{"version":5,"rules":[
+{"domain":["a.example.org"],"domain_suffix":["example.com"],"domain_keyword":["kw"],"domain_regex":["^r"]},
+{"ip_cidr":["10.0.0.0/8"]},
+{"type":"logical","mode":"or","rules":[{"ip_cidr":["172.16.0.0/12"]},{"source_ip_cidr":["100.64.0.0/10"]}]},
+{"query_type":["A","AAAA"],"network":["tcp"],"port":[443],"port_range":["1000:2000"],"source_port":[53],"source_port_range":["10:20"]},
+{"process_name":["curl"],"process_path":["/usr/bin/curl"],"process_path_regex":["^/opt"],"package_name":["com.example"],"wifi_ssid":["home"],"wifi_bssid":["00:11:22:33:44:55"]},
+{"network_type":["wifi"],"network_is_expensive":true,"network_is_constrained":true},
+{"network_interface_address":{"wifi":["192.168.0.0/16"]},"default_interface_address":["10.1.0.0/16"]},
+{"package_name_regex":["^com\\."]},
+{"domain_suffix":["adguard.example"]}
+]}

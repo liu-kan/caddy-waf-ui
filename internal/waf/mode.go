@@ -28,6 +28,8 @@ type Options struct {
 	// the GenerateSnippetWithOptions compatibility entry point.
 	VerifyProbe bool
 	Exclusions  string
+	// IPGroupFiles maps IP group names to the list files Caddy reads.
+	IPGroupFiles map[string]string
 }
 
 func DefaultOptions() Options {
@@ -65,10 +67,12 @@ type Generated struct {
 //  2. UI policy (SecAction setvar) so it overrides crs-setup/before values.
 //  3. Runtime (path-scoped) exclusions: ctl actions must run before the CRS
 //     rules they disable.
-//  4. CRS rules, the operator's after-file, then configure-time exclusions
+//  4. IP group rules (phase 1, in list order): block, trial, engine or
+//     threshold changes for clients inside or outside an IP group.
+//  5. CRS rules, the operator's after-file, then configure-time exclusions
 //     (SecRuleRemove*/SecRuleUpdateTarget*) which need the rules loaded.
-//  5. Disabled rule groups and the tuning-mode audit rule.
-//  6. Engine, response access and audit settings owned by the UI.
+//  6. Disabled rule groups and the tuning-mode audit rule.
+//  7. Engine, response access and audit settings owned by the UI.
 //
 // The revision comment and the component signature live INSIDE directives:
 // Coraza Caddy v2.6.1 pools WAF instances by directive text, so every
@@ -93,6 +97,9 @@ coraza_waf {
 {{ end }}        # ui-policy-begin
 {{ range .PolicyPre }}        {{ . }}
 {{ end }}        # ui-policy-end
+        # ui-ipgroups-begin
+{{ range .IPGroups }}        {{ . }}
+{{ end }}        # ui-ipgroups-end
         Include {{ .Options.CRSRules }}
 {{ if .Options.AfterFile }}        Include {{ .Options.AfterFile }}
 {{ end }}        # ui-config-exclusions-begin
@@ -125,6 +132,7 @@ type templateData struct {
 	Options       Options
 	PolicyPre     []string
 	PolicyPost    []string
+	IPGroups      []string
 	Runtime       []string
 	Configuration []string
 }
@@ -180,11 +188,15 @@ func Generate(site string, cfg Config, auditPath string, opts Options) (Generate
 	sig := Signature{Site: site, Revision: revision, Mode: string(cfg.Mode), BlockingPL: policy.BlockingPL,
 		DetectionPL: policy.DetectionPL, Inbound: policy.InboundThreshold, Outbound: policy.OutboundThreshold, Tuning: policy.Tuning, EarlyBlocking: policy.EarlyBlocking}
 	pre, post := policy.render()
+	groups, err := policy.renderGroups(opts.IPGroupFiles)
+	if err != nil {
+		return Generated{}, err
+	}
 	data := templateData{
 		Header:     domain.Header(site, cfg.Mode, time.Now()),
 		PolicyLine: policyLine,
 		Mode:       cfg.Mode, AuditPath: auditPath, Options: opts, Revision: revision,
-		Signature: sig.String(), PolicyPre: pre, PolicyPost: post,
+		Signature: sig.String(), PolicyPre: pre, PolicyPost: post, IPGroups: groups,
 		Runtime: runtime, Configuration: configuration,
 	}
 	var buf bytes.Buffer

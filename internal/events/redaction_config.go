@@ -2,6 +2,7 @@ package events
 
 import (
 	"fmt"
+
 	"github.com/developmi/caddy-waf-ui/internal/config"
 )
 

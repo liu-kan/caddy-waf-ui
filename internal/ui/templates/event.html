@@ -13,6 +13,7 @@
         · client <a href="/?tab=events&amp;ip={{ $e.ClientIP }}&amp;range=14d&amp;source={{ .HistoryBackend }}" class="u-mono">{{ $e.ClientIP }}</a>
         · transaction <code>{{ $e.TxID }}</code> · {{ .EventSource }}{{ if $e.Node }} on <code>{{ $e.Node }}</code>{{ end }}
       </p>
+      {{ if .ClientGroups }}<p class="banner-sub">Client IP groups: {{ range .ClientGroups }}<a href="/?tab=ipgroups&amp;ip={{ $e.ClientIP }}"><code>{{ . }}</code></a> {{ end }}</p>{{ end }}
       {{ if $e.QueryKeys }}<p class="banner-sub">Query parameters (values are not stored): {{ range $e.QueryKeys }}<code>{{ . }}</code> {{ end }}</p>{{ end }}
     </div>
     <div class="u-flex u-col u-gap">
@@ -113,7 +114,7 @@
   <div class="card-box-header">
     <div>
       <h2 class="card-title">Local match context</h2>
-      <small class="u-text-faint">Read on demand from this node's raw audit log or its rotated archives (kept 48 hours). Read-only display follows the configured local redaction level ({{ .LocalLevel }}). This lookup never writes or exports its results.</small>
+      <small class="u-text-faint">Read on demand from this node's raw audit log or its rotated archives (kept {{ .ArchiveHours }} hours after their last write). Read-only display follows the configured local redaction level ({{ .LocalLevel }}). This lookup never writes or exports its results.</small>
     </div>
     {{ if not .LocalRecord }}<a class="secondary outline btn-compact" href="/?tab=event&amp;tx={{ $e.TxID }}&amp;node={{ $e.Node }}&amp;source={{ .HistoryBackend }}&amp;ts={{ date $e.TS "2006-01-02T15:04:05.999999999Z07:00" }}&amp;raw=1">Show matched values</a>{{ end }}
   </div>

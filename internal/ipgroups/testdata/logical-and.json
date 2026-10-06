@@ -1,0 +1,1 @@
+{"version":3,"rules":[{"type":"logical","mode":"and","rules":[{"ip_cidr":["10.0.0.0/8"]},{"ip_cidr":["10.1.0.0/16"]}]}]}

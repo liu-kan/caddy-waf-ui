@@ -58,6 +58,19 @@ Coraza 的 `RelevantOnly` 只记录响应为 4xx/5xx 的请求：被拦截或将
 
 整组关闭会让该站点失去这一类检测，例如对纯 Node.js 站点关闭 933（PHP 注入）是合理的，关闭 942（SQL 注入）通常不合理。只是个别规则误报时，用 [排除](exclusions.md)。
 
+## IP 群组规则
+
+**IP group rules** 为某个 [IP 群组](ip-groups.md) 内（inside）或群组外（outside）的客户端设置独立策略，按顺序在 CRS 之前执行：
+
+| 动作 | 效果 |
+| --- | --- |
+| block | 返回 403 |
+| trial | 只记录本会拦截的请求，不拦截。上线 block 前先用它观察真实流量 |
+| engine | 切换规则引擎：On、DetectionOnly 或 Off |
+| tune | 改 blocking/detection PL、入站/出站阈值；留空的项沿用上面的站点策略 |
+
+表格末尾留有空行用于新增；勾选 **Remove** 删除一条。群组规则随站点策略一起预览、估算影响、应用和回滚，规则的语义、执行顺序与示例见 [IP 群组](ip-groups.md#群组规则)。
+
 ## 预览与应用
 
 1. 修改表单，选择 **Impact history**（本地或 Grafana Cloud Loki），点 **Preview diff and impact**。
@@ -68,7 +81,7 @@ Coraza 的 `RelevantOnly` 只记录响应为 4xx/5xx 的请求：被拦截或将
 
 - 草稿 30 分钟内有效；同一站点只保留最新的一份，再次预览会替换它；
 - 表单内容必须与预览时一致；
-- 预览之后 overlay、排除列表、IP 规则、Caddyfile 或 before/after 文件有变化，应用会被拒绝。
+- 预览之后 overlay、排除列表、IP 规则、Caddyfile、before/after 文件或策略用到的 IP 群组名单有变化，应用会被拒绝。
 
 被拒绝时重新预览即可。
 
@@ -82,7 +95,7 @@ API 直接应用，不经过草稿流程，用于自动化；同样会校验、�
 | `PUT /api/sites/{domain}/policy` | 应用策略：`{"policy":{…},"reason":"…"}` |
 | `POST /api/sites/{domain}/impact` | 只估算不应用：`{"policy":{…}}`、`{"exclusions":[…]}` 或 `{"mode":"On"}`，可选 `range`（默认 `14d`）和 `source`。返回 `impact` 和 overlay `diff` |
 
-策略字段：`blocking_pl`、`detection_pl`、`inbound_threshold`、`outbound_threshold`、`early_blocking`、`tuning`、`allowed_methods`、`allowed_content_types`、`request_body_limit`、`disabled_groups`。省略的数值字段取默认值。
+策略字段：`blocking_pl`、`detection_pl`、`inbound_threshold`、`outbound_threshold`、`early_blocking`、`tuning`、`allowed_methods`、`allowed_content_types`、`request_body_limit`、`disabled_groups`、`ip_groups`（见 [IP 群组](ip-groups.md#rest-api)）。省略的数值字段取默认值。
 
 ```sh
 curl -s -X POST -H "Authorization: Bearer $CADDY_UI_TOKEN" -H "Content-Type: application/json" \

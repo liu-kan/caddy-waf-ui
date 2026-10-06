@@ -1,4 +1,28 @@
-# Configurable privacy validation — 2026-10-06
+# Validation
+
+Runs are listed newest first. No run modified or rebuilt the backend image (`liukan/caddy-with-auth:latest`, local image `3a4bf970ed0c`).
+
+## 2026-10-06 redaction review and IP groups
+
+This run reviewed the configurable redaction round (commits 1343f53 and f4a6865), completed the paused items and added IP groups.
+
+| Check | Result and scope |
+| --- | --- |
+| gofmt / go vet / golangci-lint | Passed; zero lint findings |
+| `go test -race ./...` | Passed, all packages |
+| Redaction review | Probes at standard: truncated JSON objects and arrays and escaped keys were hidden; a multipart body kept its `name="password"` part value. Fixed: standard and strict hide multipart bodies whole, and so does full when a hide list is set (as for XML), with a regression test |
+| Raw audit archives | Retention is configurable (`CADDY_UI_AUDIT_ARCHIVE_HOURS`, minimum 48 hours); match lookup picks the archive by event time before the newest-first fallback |
+| sing-box rule-set parser | Fixtures compiled with sing-box v1.14.2's encoder; parsed prefixes equal sing-box's own decoding for rule-set versions 1, 3 and 5, including skipped domain, AdGuard, port, process and interface-address rules and 3,600 random prefixes. Mixed-condition, inverted and `and` rules are rejected; truncated, trailing-data, bad-zlib, bad-family, decompression-bomb and over-limit inputs fail |
+| Group registry | File and HTTPS sources (local TLS servers): conditional requests, size, redirect and status limits, proxy through CONNECT, shrink hold/approve/discard, a failed import keeps the active list, unreferenced lists are collected |
+| Native request test (`CADDY_TEST_BINARY`: Caddy v2.11.6, coraza-caddy/v2 v2.6.1, Coraza v3.8.0, CRS v4.25.0) | Passed. Through the trusted-proxy client address: block from a `.srs` list (range and single address; an adjacent address passed), DetectionOnly for one group while non-members were still blocked by CRS, a raised inbound threshold, trial with audit messages, and a refreshed source republished and applied |
+| Real-image Compose run | Groups created through the API from a mounted `.srs` (4 prefixes) and a text list. Block 403, trial 200 with a would-block event, engine Off 200 on `/.env`, outside-group block 403; validate, load, readback and request stages succeeded; DHI Caddy read the UI-written 0640 lists; events carried the group messages. Editing a source and refreshing republished the site (journal action `ipgroup`) and lifted the block |
+| Redaction in the real image | Local standard kept the SQL injection fragment and the query with `access_token=[redacted]`; the cloud queue copy was strict; the secret marker appeared in neither event file. `CADDY_UI_CLOUD_EXPORT=false` stopped queue writes, removed the migration marker and kept recording local events; the event page showed the configured 96-hour archive window |
+| Matching cost | Coraza's `@ipMatchFromFile` checks every prefix: about 0.15 ms per request for 10,000 prefixes and 0.9 ms for 100,000 (worst case, Apple M1 Max) |
+| Chinese documentation | All relative links and heading anchors in `documentation/zh/` resolve |
+
+Not exercised: the real Grafana Cloud tenant (no credentials) and downloads from a real Internet URL; the HTTPS path is covered by local TLS servers. The disposable Compose project, its volumes and networks were removed.
+
+## 2026-10-06 configurable privacy
 
 Opus's committed baseline passed its race suite. Review found that the new level engine was not connected to runtime/persistence/export, and on-demand raw viewing exposed query credentials and unclassified fragments. Those paths now share the configured policy; a separate cloud queue prevents richer local data from being an Alloy input. Opus's dictionary lookup fix, unmatched-audit filtering, deployment ownership and Chinese guides were preserved.
 
@@ -12,9 +36,7 @@ Current validation:
 
 The actual Grafana Cloud tenant was not exercised because no account credentials were present. Production services were not changed. The isolated project's resources were removed after validation. Previous runs are recorded below.
 
-# Local/cloud implementation validation
-
-## 2026-10-06 follow-up
+## 2026-10-06 review follow-up
 
 This run reviewed the 2026-10-05 changes, fixed the issues below and repeated the checks against the same backend image (`liukan/caddy-with-auth:latest`, image `3a4bf970ed0c`, digest `sha256:ae47447d…ba1c2c`) and `grafana/alloy:v1.20.0`. The backend image was not modified or rebuilt.
 
@@ -35,7 +57,6 @@ This run reviewed the 2026-10-05 changes, fixed the issues below and repeated th
 Light-load memory after this run: Caddy 112 MiB, UI 10 MiB, Alloy 123 MiB, within the Compose limits. Grafana Cloud credentials were still unavailable; the real cloud account was not exercised. The disposable Compose project, its volumes and networks, and the fixture process were removed after validation.
 
 ## 2026-10-05
-
 
 The existing `liukan/caddy-with-auth:latest` backend was reused, not rebuilt. This run implemented direct cloud-history viewing and reviewed policy/exclusion workflow, then tested them in isolated local environments. No production service, certificate volume or real Grafana Cloud account was changed.
 

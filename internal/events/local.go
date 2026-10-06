@@ -31,7 +31,20 @@ var ErrLocalRecordNotFound = errors.New("raw audit record not available locally"
 var ErrLocalScanLimit = errors.New("local audit scan budget reached; use a newer event or retained normalized context")
 var txIDPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
 
-const maxLocalScan = 64 << 20
+// maxLocalScan bounds the bytes scanned per lookup across all files when
+// the event time cannot select the archive; maxCandidateScan bounds each
+// time-selected file.
+const (
+	maxLocalScan     = 64 << 20
+	maxCandidateScan = 256 << 20
+)
+
+// rotatedLayout is the UTC suffix of rotated archives (service.RotateAudit).
+const rotatedLayout = "20060102T150405.000000000Z"
+
+// rotationSlack: right after a rotation, old WAF instances keep appending
+// to the renamed file until every site has reopened its log.
+const rotationSlack = 5 * time.Minute
 
 var localScanGate = make(chan struct{}, 1)
 
@@ -56,6 +69,25 @@ func FindLocalRecordWithPolicy(ctx context.Context, auditPath string, event *Eve
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+	// The event time selects the file directly, so a long archive retention
+	// does not turn every lookup into a scan of all archives.
+	tried := map[string]bool{}
+	if !event.TS.IsZero() {
+		candidates, err := localCandidates(auditPath, event.TS)
+		if err != nil {
+			return nil, err
+		}
+		for _, name := range candidates {
+			tried[name] = true
+			rec, _, err := scanLocalFile(ctx, name, event, maxCandidateScan)
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				return nil, err
+			}
+			if rec != nil {
+				return localFromRecord(rec, name, policy), nil
+			}
+		}
+	}
 	archives, err := filepath.Glob(auditPath + ".rotated-*")
 	if err != nil {
 		return nil, err
@@ -63,6 +95,9 @@ func FindLocalRecordWithPolicy(ctx context.Context, auditPath string, event *Eve
 	sort.Sort(sort.Reverse(sort.StringSlice(archives)))
 	budget := int64(maxLocalScan)
 	for _, name := range append([]string{auditPath}, archives...) {
+		if tried[name] {
+			continue
+		}
 		rec, n, err := scanLocalFile(ctx, name, event, budget)
 		budget -= n
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -76,6 +111,38 @@ func FindLocalRecordWithPolicy(ctx context.Context, auditPath string, event *Eve
 		}
 	}
 	return nil, ErrLocalRecordNotFound
+}
+
+// localCandidates returns the raw files that may hold a record written at
+// ts, most likely first: the first archive rotated after ts (or the live
+// file), then the previous file when ts falls right after its rotation.
+// Archives whose name carries no rotation time are left to the fallback scan.
+func localCandidates(auditPath string, ts time.Time) ([]string, error) {
+	paths, err := filepath.Glob(auditPath + ".rotated-*")
+	if err != nil {
+		return nil, err
+	}
+	type archive struct {
+		path string
+		at   time.Time
+	}
+	var list []archive
+	for _, p := range paths {
+		at, err := time.Parse(rotatedLayout, strings.TrimPrefix(p, auditPath+".rotated-"))
+		if err == nil {
+			list = append(list, archive{p, at})
+		}
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].at.Before(list[j].at) })
+	i := sort.Search(len(list), func(i int) bool { return list[i].at.After(ts) })
+	out := []string{auditPath}
+	if i < len(list) {
+		out[0] = list[i].path
+	}
+	if i > 0 && ts.Sub(list[i-1].at) < rotationSlack {
+		out = append(out, list[i-1].path)
+	}
+	return out, nil
 }
 
 // deadlineReader is bounded independently of record boundaries, so a

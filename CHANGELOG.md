@@ -18,9 +18,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/) · Versioning: [Semantic
 * **Scoped exclusions**: rule or tag exclusions narrowed to an ARGS key (or `/regex/`), an exact or prefix path and an optional UTC expiry enforced per request; decision, control and UI rules cannot be excluded.
 * **Reviewed publishing**: browser policy/exclusion changes use a 30-minute draft whose SHA256 and baseline hashes are checked on Apply. Every publish records validate/load/readback/request stages, compensates on failure and keeps `last_good` evidence. Optional per-site origin probes (`CADDY_UI_PROBE_URLS`) verify the live revision and engine mode.
 * **Change journal**: reasons, actors, stages and diffs for every attempted change, shown in Rollback & History and available from `GET /api/changes`.
-* **Raw audit rotation**: rename/reopen at `CADDY_UI_AUDIT_ROTATE_MB` (32 MiB) with 48-hour archives that are deleted only after ingestion.
+* **Raw audit rotation**: rename/reopen at `CADDY_UI_AUDIT_ROTATE_MB` (32 MiB). Archives are kept `CADDY_UI_AUDIT_ARCHIVE_HOURS` after their last write (default and minimum 48) and deleted only after ingestion; the on-demand local match context selects the archive by the event time.
+* **Configurable redaction**: independent local and cloud levels (`CADDY_UI_REDACTION_LOCAL`, `CADDY_UI_REDACTION_CLOUD`: strict, standard or full) with shared hide/keep name lists. Credential names are recognized as whole words, so fields such as `max_tokens` or `author` stay visible at standard. Alloy reads a separately redacted export queue (`/ui-data/cloud/events`), which `CADDY_UI_CLOUD_EXPORT=false` turns off.
+* **IP groups**: named IP lists imported from sing-box rule-sets (binary `.srs` versions 1 to 5, or JSON source) or CIDR lists, from a read-only file directory or HTTPS URLs refreshed on a schedule (ETag/Last-Modified, optional `CADDY_UI_IPGROUP_PROXY`). Lists are normalized into content-addressed files; empty lists never apply and a list that loses more than half of its prefixes waits for approval. Site policies attach ordered `block`, `trial`, `engine` and `tune` rules for clients inside or outside a group, evaluated by Coraza with `@ipMatchFromFile`, previewed and estimated with the rest of the policy and republished when a list changes. Events show the client's groups; `/metrics` exports per-group list size, last check, errors and pending approvals.
 * **Grafana Cloud (optional)**: Alloy (`cloud` profile) ships redacted events plus access, runtime and change metadata to Loki with separate read/write tokens; the local UI queries Loki directly, backfills ranges and links to Grafana Explore. `/metrics` is available behind its own token.
-* **REST API**: events, explanations, rules, analysis, policy, impact, changes and Loki backfill endpoints alongside the existing mode, exclusion, IP rule, backup and rollback endpoints.
+* **REST API**: events, explanations, rules, analysis, policy, impact, changes, Loki backfill and IP group endpoints alongside the existing mode, exclusion, IP rule, backup and rollback endpoints.
 * **Chinese documentation**: `documentation/zh/` covers deployment, configuration, the backend image, Grafana Cloud, security, upgrade notes and every page with its REST API.
 
 ### Changed
@@ -36,10 +38,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/) · Versioning: [Semantic
 * **Body-limit interruptions**: blocked events without a decision rule (typically HTTP 413) now explain the likely cause.
 * **Rule search**: a partial numeric ID falls back to a substring search instead of an "unknown rule" result.
 * **Analysis API**: `GET /api/analysis` uses snake_case field names like the rest of the API.
+* **Multipart bodies**: standard redaction, and full with a hide list, no longer keep multipart request-body excerpts, whose parts are named in headers rather than as pairs and could reveal a password field.
 
 ### Security
 
-* Matched values are redacted by default (`CADDY_UI_MATCHED_VALUES=true` is an explicit opt-in); credential headers, cookies and credential-like parameters are always hidden. Compose defaults to the `AHKZ` audit parts (no request headers); `ABHKZ` is a local diagnostic opt-in, and raw audit files never leave the host.
+* Standalone and Compose fallbacks are strict for both local and cloud events; `.env.example` recommends local standard and cloud strict. Invalid levels stop startup. `CADDY_UI_MATCHED_VALUES` is deprecated. Compose defaults to the `AHKZ` audit parts (no request headers); `ABHKZ` is a local diagnostic opt-in, and raw audit files never leave the host.
+* IP group downloads accept only HTTPS without embedded credentials, keep redirects on HTTPS and bound the download, decompressed and list sizes.
 * The UI mounts only the audit directory read-write for rotation, never the certificate-bearing `/data` volume. Alloy mounts neither the Docker nor the Admin socket.
 
 ---

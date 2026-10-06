@@ -34,6 +34,7 @@
 | 页面上的修改 | 策略和排除改为"预览 → 应用"，应用时校验草稿 |
 | API | 原有 5 个端点保留，排除的载荷新增可选字段，旧载荷仍可用；新增事件、规则、分析、策略、影响估算、变更历史、Loki 导入等端点 |
 | 指标 | 新增 `/metrics`，默认关闭 |
+| IP 群组 | 新增 **IP Groups** 页：从 sing-box 规则集（.srs/JSON）或 CIDR 列表、挂载文件或 HTTPS 地址导入并定期更新名单；站点策略可按群组拦截、试运行、切换引擎或调整阈值，见 [IP 群组](ip-groups.md) |
 
 ## 审计日志
 
@@ -63,4 +64,8 @@
 
 用新变量 REDACTION_LOCAL / REDACTION_CLOUD 替换旧 MATCHED_VALUES。推荐本地 standard、云端 strict。升级 Alloy 配置，使其只读 `/ui-data/cloud/events/events-*.jsonl`；旧版本直接读 `/ui-data/events`，不得继续用于本地丰富事件。新 UI 首次启动会把已有本地记录按云端策略迁移到新队列，导回记录跳过；中断可重试。此后新记录双写成功才推进读取位置。迁移失败会停用读取并显示错误，纠正磁盘/权限后重启。
 
-新队列额外默认保留 14 天、上限 128 MiB。已经排队或上传的数据不会因修改策略自动清除。详见 [可配置脱敏](redaction.md)。
+新队列额外默认保留 14 天、上限 128 MiB。已经排队或上传的数据不会因修改策略自动清除。不上传 Grafana Cloud 时设 `CADDY_UI_CLOUD_EXPORT=false`。原始审计归档的保留时间可用 `CADDY_UI_AUDIT_ARCHIVE_HOURS` 调长（至少 48 小时）。详见 [可配置脱敏](redaction.md)。
+
+## IP 群组（2026-10-06）
+
+Compose 新增只读挂载 `${CADDY_UI_IPGROUP_PATH:-./ipgroups}:/ipgroups`。合并到已有部署时，为 UI 加上这个挂载（或设置 `CADDY_UI_IPGROUP_DIR`），需要通过代理下载时设置 `CADDY_UI_IPGROUP_PROXY`。名单文件写在受管 overlay 卷的 `ipgroups/` 子目录，Caddy 通过已有的只读挂载读取，不需要新卷。

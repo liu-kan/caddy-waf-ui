@@ -355,7 +355,7 @@ func HandleAPIImpact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	impact := analysis.Estimate(window, analysis.Profiles(window), dictionary(),
-		analysis.Change{Exclusions: req.Exclusions, Policy: req.Policy, Mode: req.Mode})
+		analysis.Change{Exclusions: req.Exclusions, Policy: req.Policy, Mode: req.Mode, Member: groupMember()})
 	resp := map[string]any{"impact": toAPIImpact(impact)}
 	var preview service.Preview
 	var err error

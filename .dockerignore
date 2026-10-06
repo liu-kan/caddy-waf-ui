@@ -60,3 +60,6 @@ tools/
 
 # macOS
 .DS_Store
+
+# Operator IP group sources are mounted at runtime, never built in
+/ipgroups/

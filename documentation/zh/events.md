@@ -9,7 +9,7 @@ UI 每 2 秒（`CADDY_UI_INGEST_INTERVAL`）读取一次审计日志，把新记
 - 按事务 ID 和节点去重；
 - 用规则字典补全每条命中的类型、分值、PL 和类别，并重新计算入站/出站分；
 - 从 overlay 写入的签名（`SecComponentSignature`）读出当时的模式、策略和 revision；
-- 匹配内容默认替换为 `[redacted]`，查询串只保留参数名，请求头和请求体不进入事件。
+- 按本地脱敏级别（`CADDY_UI_REDACTION_LOCAL`）处理匹配内容、查询值和请求头：strict 只保留规则、变量名和查询参数名；standard 另外保留匹配片段、非凭据查询值和诊断请求头；full 保留已采集的内容。请求体不进入事件。见 [可配置脱敏](redaction.md)。
 
 事件按动作分三类：
 
@@ -64,13 +64,17 @@ UI 每 2 秒（`CADDY_UI_INGEST_INTERVAL`）读取一次审计日志，把新记
 
 ## 本地匹配内容
 
-事件里的匹配内容默认是 `[redacted]`。在产生该事件的节点上，点 **Show matched values** 会按事务 ID 到原始审计日志（以及 48 小时内的轮转归档）里找回这条记录，显示每条规则匹配到的变量、匹配片段和值摘录，以及按当前本地策略处理过的请求 URI。
+事件里保留多少匹配内容取决于本地脱敏级别。在产生该事件的节点上，点 **Show matched values** 会按事件时间和事务 ID 到原始审计日志或对应的轮转归档（保留 `CADDY_UI_AUDIT_ARCHIVE_HOURS`，默认 48 小时）里找回这条记录，显示每条规则匹配到的变量、匹配片段和值摘录，以及按当前本地策略处理过的请求 URI。
 
 - 只在请求时读取，结果不写入事件文件，也不会上传。
 - 内容受当前本地 strict/standard/full 策略约束；standard 隐藏识别出的凭据，显式 full 可保留凭据。
-- 原始记录已轮转删除（超过 48 小时且已读完），或事件来自其他节点时，页面会说明找不到。
+- 原始记录已轮转删除（超过归档保留时间且已读完），或事件来自其他节点时，页面会说明找不到。
 
 本地保留和云端发送的级别可分别调整；Show matched values 同样服从本地级别，strict 不会被这个入口绕过。见 [可配置脱敏](redaction.md)。
+
+## IP 群组
+
+客户端 IP 属于某些 [IP 群组](ip-groups.md) 时，事件标题下显示 **Client IP groups**，点击可查看该地址的群组归属。群组规则的命中也出现在规则列表中：9002000 起为拦截和试运行（"IP group policy: inside office blocked"、"IP group policy (trial): … would be blocked"），9002500 起为引擎和阈值调整。阈值调整规则带有当时生效的 PL 和阈值，事件按这些值计分和判定。
 
 ## 人工判定
 

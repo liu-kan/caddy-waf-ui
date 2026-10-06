@@ -48,6 +48,7 @@ UI 只通过环境变量配置。Compose 部署时写在 `.env`（权限 0600，
 | --- | --- | --- |
 | `CADDY_UI_AUDIT_LOG` | Coraza 原始审计日志，Caddy 与 UI 中路径相同 | `/data/logs/coraza-audit.log` |
 | `CADDY_UI_AUDIT_ROTATE_MB` | 原始日志超过该大小就改名轮转并让 WAF 重新打开文件；`0` 关闭 | `32` |
+| `CADDY_UI_AUDIT_ARCHIVE_HOURS` | 轮转后的原始归档在最后写入后保留的小时数（最少 48），期间可在事件页查看本地匹配内容 | `48` |
 | `CADDY_UI_INGEST_INTERVAL` | 读取审计日志的间隔 | `2s` |
 | `CADDY_UI_EVENTS_RETENTION_DAYS` | 本地规范化事件保留天数（每日汇总另外长期保留） | `14` |
 | `CADDY_UI_EVENTS_DISK_MAX_MB` | 本地规范化事件文件的磁盘上限；到达上限后暂停读取，不删除未上传的事件 | `128` |
@@ -57,8 +58,20 @@ UI 只通过环境变量配置。Compose 部署时写在 `.env`（权限 0600，
 | `CADDY_UI_REDACTION_HIDE` | 两端都隐藏的名称，优先于 keep | 空 |
 | `CADDY_UI_REDACTION_KEEP` | 覆盖 standard 内置判断的名称，不突破 strict/hide | 空 |
 | `CADDY_UI_CLOUD_DISK_MAX_MB` | 独立云端导出队列上限 | 128 |
+| `CADDY_UI_CLOUD_EXPORT` | 是否为 Alloy 写出按云端级别脱敏的事件副本；不上传 Grafana Cloud 时设 `false` 节省磁盘和 CPU。重新打开后会把保留期内的本地事件补入队列 | `true` |
 | `CADDY_UI_NODE` | 节点标识，写入每条事件。多台源站共用一个 Loki 时必须各不相同 | 主机名；Compose 中为 `caddy-local` |
 | `CADDY_UI_PROBE_URLS` | 每个站点的源站验证 URL，JSON 对象，例如 `{"chat.example.com":"https://origin.internal/__waf_health"}` | 空（跳过请求验证） |
+
+## IP 群组
+
+| 变量 | 说明 | 默认值 |
+| --- | --- | --- |
+| `CADDY_UI_IPGROUP_DIR` | 文件来源所在目录（UI 容器内），只读挂载 | `/ipgroups` |
+| `CADDY_UI_IPGROUP_MAX_PREFIXES` | 单个群组名单的最大前缀数 | `100000` |
+| `CADDY_UI_IPGROUP_PROXY` | 只用于群组下载的 HTTP(S) 代理，例如 `http://10.0.0.2:7890`；为空时使用 `HTTPS_PROXY`/`NO_PROXY` | 空 |
+| `CADDY_UI_IPGROUP_PATH` | （仅 Compose）挂载到 `/ipgroups` 的宿主机目录 | `./ipgroups` |
+
+详见 [IP 群组](ip-groups.md)。
 
 ## Grafana Cloud 与指标
 

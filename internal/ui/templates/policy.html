@@ -79,6 +79,48 @@
       <small>Prefer exclusions: a disabled group stops every rule of that file for the whole site.</small>
     </div>
   </div>
+  <h2 class="card-title card-title-spaced">IP group rules</h2>
+  <p class="u-text-sm">
+    Applied in order to clients inside or outside an IP group, before the CRS rules: <strong>block</strong> denies with 403;
+    <strong>trial</strong> only records the requests a block would deny (use it first: it shows the real traffic of the group);
+    <strong>engine</strong> switches the rule engine; <strong>tune</strong> changes paranoia levels and thresholds
+    (empty values keep the site policy). Groups are managed on <a href="/?tab=ipgroups">IP Groups</a>.
+  </p>
+  <input type="hidden" name="ipg_count" value="{{ len .PolicyForm.Rows }}">
+  <div class="table-scroll">
+    <table class="table-compact u-text-md">
+      <thead><tr><th scope="col">#</th><th scope="col">Group</th><th scope="col">Clients</th><th scope="col">Action</th><th scope="col">Engine</th><th scope="col">Blocking PL</th><th scope="col">Detection PL</th><th scope="col">Inbound</th><th scope="col">Outbound</th><th scope="col">Note</th><th scope="col">Remove</th></tr></thead>
+      <tbody>
+        {{ range $i, $row := .PolicyForm.Rows }}
+          <tr>
+            <td>{{ add $i 1 }}</td>
+            <td><select name="ipg_group_{{ $i }}" aria-label="Group">
+              <option value="">—</option>
+              {{ range $.IPGroupNames }}<option value="{{ . }}" {{ if eq . $row.Group }}selected{{ end }}>{{ . }}</option>{{ end }}
+              {{ if and $row.Group (not (contains $.IPGroupNames $row.Group)) }}<option value="{{ $row.Group }}" selected>{{ $row.Group }} (missing)</option>{{ end }}
+            </select></td>
+            <td><select name="ipg_match_{{ $i }}" aria-label="Clients">
+              <option value="inside" {{ if ne $row.Match "outside" }}selected{{ end }}>inside</option>
+              <option value="outside" {{ if eq $row.Match "outside" }}selected{{ end }}>outside</option>
+            </select></td>
+            <td><select name="ipg_action_{{ $i }}" aria-label="Action">
+              {{ range (strings "block" "trial" "engine" "tune") }}<option value="{{ . }}" {{ if eq . $row.Action }}selected{{ end }}>{{ . }}</option>{{ end }}
+            </select></td>
+            <td><select name="ipg_engine_{{ $i }}" aria-label="Engine">
+              <option value="">—</option>
+              {{ range (strings "On" "DetectionOnly" "Off") }}<option value="{{ . }}" {{ if eq . $row.Engine }}selected{{ end }}>{{ . }}</option>{{ end }}
+            </select></td>
+            <td><input type="number" name="ipg_bpl_{{ $i }}" min="1" max="4" value="{{ $row.BlockingPL }}" aria-label="Blocking PL"></td>
+            <td><input type="number" name="ipg_dpl_{{ $i }}" min="1" max="4" value="{{ $row.DetectionPL }}" aria-label="Detection PL"></td>
+            <td><input type="number" name="ipg_in_{{ $i }}" min="1" max="10000" value="{{ $row.Inbound }}" aria-label="Inbound threshold"></td>
+            <td><input type="number" name="ipg_out_{{ $i }}" min="1" max="10000" value="{{ $row.Outbound }}" aria-label="Outbound threshold"></td>
+            <td><input type="text" name="ipg_note_{{ $i }}" maxlength="200" value="{{ $row.Note }}" aria-label="Note"></td>
+            <td>{{ if $row.Group }}<input type="checkbox" name="ipg_remove_{{ $i }}" aria-label="Remove rule {{ add $i 1 }}">{{ end }}</td>
+          </tr>
+        {{ end }}
+      </tbody>
+    </table>
+  </div>
   <label>Reason (recorded in the change history)
     <input type="text" name="reason" value="{{ .PolicyForm.Reason }}" placeholder="e.g. raise to PL2 after a week of detection-only data" maxlength="500">
   </label>

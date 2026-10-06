@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"sort"
 	"strconv"
@@ -18,6 +19,7 @@ import (
 	"github.com/developmi/caddy-waf-ui/internal/domain"
 	"github.com/developmi/caddy-waf-ui/internal/events"
 	"github.com/developmi/caddy-waf-ui/internal/feedback"
+	"github.com/developmi/caddy-waf-ui/internal/ipgroups"
 	"github.com/developmi/caddy-waf-ui/internal/journal"
 	"github.com/developmi/caddy-waf-ui/internal/service"
 	"github.com/developmi/caddy-waf-ui/internal/waf"
@@ -36,6 +38,8 @@ type wafData struct {
 	LocalLevel, CloudLevel string
 	PipelineError          string
 	CloudStats             events.Stats
+	CloudExport            bool
+	ArchiveHours           int
 	StoreReady             bool
 	StoreStats             events.Stats
 	IngestReady            bool
@@ -66,7 +70,8 @@ type wafData struct {
 	NoDecision bool
 
 	// LocalPossible: the event was ingested on this node, so its raw audit
-	// record may still exist locally (rotated archives are kept 48 hours).
+	// record may still exist locally (rotated archives are kept for
+	// CADDY_UI_AUDIT_ARCHIVE_HOURS after their last write).
 	LocalPossible    bool
 	LocalRecord      *events.LocalRecord
 	LocalRecordError string
@@ -97,6 +102,19 @@ type wafData struct {
 	FPCandidates     []analysis.FPCandidate
 
 	Changes []journal.Entry
+
+	IPGroupsReady bool
+	IPGroupNames  []string
+	IPGroupViews  []ipGroupView
+	IPGroupForm   ipgroups.Definition
+	IPGroupDir    string
+	IPGroupMax    int
+	LookupIP      string
+	LookupDone    bool
+	LookupGroups  []string
+	LookupError   string
+	// ClientGroups are the IP groups that hold the event's client address.
+	ClientGroups []string
 }
 
 type eventFilter struct {
@@ -130,7 +148,18 @@ type policyForm struct {
 	EarlyBlocking, Tuning                      bool
 	Methods, ContentTypes, BodyLimit, Reason   string
 	Groups                                     map[string]bool
+	IPGroupRules                               []ipGroupRuleForm
 }
+
+// ipGroupRuleForm is one row of the IP group rules editor, as typed.
+type ipGroupRuleForm struct {
+	Group, Match, Action, Engine               string
+	BlockingPL, DetectionPL, Inbound, Outbound string
+	Note                                       string
+}
+
+// blankIPGroupRows are the empty rows offered for new group rules.
+const blankIPGroupRows = 2
 
 // exclusionForm holds the add-exclusion form values.
 type exclusionForm struct {
@@ -173,6 +202,13 @@ func (f policyForm) toPolicy() (waf.Policy, error) {
 		}
 		p.RequestBodyLimit = n
 	}
+	for i, row := range f.IPGroupRules {
+		rule, perr := row.toRule()
+		if perr != nil {
+			return waf.Policy{}, fmt.Errorf("IP group rule %d: %w", i+1, perr)
+		}
+		p.IPGroups = append(p.IPGroups, rule)
+	}
 	p.AllowedMethods = splitList(f.Methods)
 	p.AllowedContentTypes = splitList(f.ContentTypes)
 	for g, on := range f.Groups {
@@ -203,6 +239,9 @@ func formFromPolicy(p waf.Policy) policyForm {
 	for _, g := range p.DisabledGroups {
 		f.Groups[g] = true
 	}
+	for _, rule := range p.IPGroups {
+		f.IPGroupRules = append(f.IPGroupRules, ruleFormFrom(rule))
+	}
 	return f
 }
 
@@ -217,7 +256,66 @@ func policyFormFromRequest(r *http.Request) policyForm {
 	for _, g := range r.Form["disabled_groups"] {
 		f.Groups[g] = true
 	}
+	count := min(atoiDefault(r.FormValue("ipg_count"), 0), waf.MaxIPGroupRules+blankIPGroupRows)
+	for i := 0; i < count; i++ {
+		field := func(name string) string { return strings.TrimSpace(r.FormValue("ipg_" + name + "_" + strconv.Itoa(i))) }
+		row := ipGroupRuleForm{Group: field("group"), Match: field("match"), Action: field("action"), Engine: field("engine"),
+			BlockingPL: field("bpl"), DetectionPL: field("dpl"), Inbound: field("in"), Outbound: field("out"), Note: field("note")}
+		if row.Group == "" || field("remove") != "" {
+			continue
+		}
+		f.IPGroupRules = append(f.IPGroupRules, row)
+	}
 	return f
+}
+
+// Rows returns the typed group rules plus empty rows for new rules.
+func (f policyForm) Rows() []ipGroupRuleForm {
+	return append(append([]ipGroupRuleForm(nil), f.IPGroupRules...), make([]ipGroupRuleForm, blankIPGroupRows)...)
+}
+
+// toRule converts a typed row; empty numbers mean "not set".
+func (row ipGroupRuleForm) toRule() (waf.IPGroupRule, error) {
+	rule := waf.IPGroupRule{Group: row.Group, Negate: row.Match == "outside", Action: row.Action, Note: row.Note}
+	if rule.Action == waf.GroupEngine {
+		rule.Engine = row.Engine
+	}
+	if rule.Action != waf.GroupTune {
+		return rule, nil
+	}
+	var err error
+	parse := func(raw string, dst *int, name string) {
+		if err != nil || raw == "" {
+			return
+		}
+		n, perr := strconv.Atoi(raw)
+		if perr != nil {
+			err = fmt.Errorf("%s must be a number", name)
+			return
+		}
+		*dst = n
+	}
+	parse(row.BlockingPL, &rule.BlockingPL, "blocking paranoia level")
+	parse(row.DetectionPL, &rule.DetectionPL, "detection paranoia level")
+	parse(row.Inbound, &rule.InboundThreshold, "inbound threshold")
+	parse(row.Outbound, &rule.OutboundThreshold, "outbound threshold")
+	return rule, err
+}
+
+func ruleFormFrom(rule waf.IPGroupRule) ipGroupRuleForm {
+	row := ipGroupRuleForm{Group: rule.Group, Match: "inside", Action: rule.Action, Engine: rule.Engine, Note: rule.Note}
+	if rule.Negate {
+		row.Match = "outside"
+	}
+	number := func(n int) string {
+		if n == 0 {
+			return ""
+		}
+		return strconv.Itoa(n)
+	}
+	row.BlockingPL, row.DetectionPL = number(rule.BlockingPL), number(rule.DetectionPL)
+	row.Inbound, row.Outbound = number(rule.InboundThreshold), number(rule.OutboundThreshold)
+	return row
 }
 
 func groupOptions(selected map[string]bool) []groupOption {
@@ -237,8 +335,10 @@ func fillStatus(d *wafData) {
 		return
 	}
 	d.LocalLevel, d.CloudLevel = rt.Redaction.Local.Level.String(), rt.Redaction.Cloud.Level.String()
+	d.ArchiveHours = config.AuditArchiveHours()
 	d.PipelineError = rt.PipelineError
 	if rt.CloudStore != nil {
+		d.CloudExport = true
 		d.CloudStats = rt.CloudStore.Stats()
 	}
 	if rt.Store != nil {
@@ -397,6 +497,11 @@ func buildEventDetail(q url.Values, d *wafData) {
 	d.Feedback, _ = feedback.Get(e.Node, e.TxID)
 	d.EventHits = buildHitViews(e, dict)
 	d.NoDecision = e.Interrupted && !hasDecision(e)
+	if reg := service.IPGroups(); reg != nil {
+		if addr, err := netip.ParseAddr(e.ClientIP); err == nil {
+			d.ClientGroups = reg.Lookup(addr)
+		}
+	}
 	d.LocalPossible = e.Node == "" || e.Node == config.NodeName()
 	if d.LocalPossible && q.Get("raw") == "1" {
 		// Read on demand only: matched values never enter the event files.
@@ -561,6 +666,7 @@ func buildPolicyData(site *domain.Site, d *wafData) {
 	}
 	d.Policy = state.Policy
 	d.PolicyForm = formFromPolicy(state.Policy)
+	d.IPGroupNames = groupNames()
 	d.Groups = groupOptions(d.PolicyForm.Groups)
 }
 
@@ -654,6 +760,8 @@ func buildWAFData(r *http.Request, tab string, data *pageData) {
 		data.HistoryBackend = q.Get("source")
 	case "rollback":
 		buildHistoryData(data.CurrentSite, &data.wafData)
+	case "ipgroups":
+		buildIPGroupsData(q, &data.wafData)
 	}
 }
 
@@ -686,7 +794,7 @@ func HandleFormPolicy(w http.ResponseWriter, r *http.Request) {
 	if r.FormValue("action") == "preview" {
 		preview, perr := service.CreatePolicyDraft(domainName, policy)
 		window, historyErr := historyWindow(r.Context(), r.FormValue("source"), domainName, 14*24*time.Hour)
-		impact := analysis.Estimate(window, analysis.Profiles(window), dictionary(), analysis.Change{Policy: &policy})
+		impact := analysis.Estimate(window, analysis.Profiles(window), dictionary(), analysis.Change{Policy: &policy, Member: groupMember()})
 		renderTab(w, r, "policy", domainName, func(d *pageData) {
 			d.PolicyForm, d.Groups = form, groupOptions(form.Groups)
 			d.HistoryBackend = r.FormValue("source")

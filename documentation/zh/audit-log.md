@@ -45,7 +45,7 @@ UI 每 `CADDY_UI_INGEST_INTERVAL`（默认 2 秒）读取一次新增内容：
 2. 对每个受管站点重新应用当前模式。新的 revision 让 Coraza 建立新的 WAF 实例，打开新文件；
 3. 变更历史中出现操作人为 `audit-maintenance`、原因为 "reopen rotated audit log" 的记录。
 
-UI 继续读取归档文件，直到读完。归档在最后修改超过 48 小时、且已读到末尾后删除；48 小时用于接收长连接请求结束时才写入的记录。
+UI 继续读取归档文件，直到读完。归档在最后修改超过 `CADDY_UI_AUDIT_ARCHIVE_HOURS`（默认、也是最少 48 小时）且已读到末尾后删除。48 小时用于接收长连接请求结束时才写入的记录；调大它可以让事件页的"本地匹配内容"覆盖更久以前的事件，查找时按事件时间直接定位到对应归档。
 
 注意：
 
@@ -58,7 +58,7 @@ UI 继续读取归档文件，直到读完。归档在最后修改超过 48 小�
 
 | 数据 | 位置 | 上限与清理 |
 | --- | --- | --- |
-| 原始审计日志与归档 | `/data/logs/` | 单文件约 32 MiB 后轮转；归档保留至少 48 小时，读完后删除 |
+| 原始审计日志与归档 | `/data/logs/` | 单文件约 32 MiB 后轮转；归档保留 `CADDY_UI_AUDIT_ARCHIVE_HOURS`（至少 48 小时），读完后删除 |
 | 规范化事件 | `/ui-data/events/` | 保留 `CADDY_UI_EVENTS_RETENTION_DAYS`（14 天）；总量上限 `CADDY_UI_EVENTS_DISK_MAX_MB`（128 MiB） |
 | 每日汇总 | `/ui-data/rollups/` | 按月存储，长期保留，体积很小 |
 | 快照 | `/backups/` | 每站点每种类型 `CADDY_UI_BACKUP_KEEP`（10）份 |

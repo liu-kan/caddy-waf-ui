@@ -14,6 +14,10 @@ UI 在 `/metrics` 提供 Prometheus 文本格式的指标。默认关闭：`CADD
 | `waf_ingest_last_poll_timestamp_seconds` | gauge | | 最近一次读取的 Unix 时间 |
 | `waf_events_in_memory` | gauge | | 内存中缓存的事件数 |
 | `waf_policy_info` | gauge（值为 1） | `site`、`mode`、`blocking_pl`、`detection_pl`、`tuning` | 每个受管站点当前的模式与策略 |
+| `waf_ipgroup_prefixes` | gauge | `group` | 每个 IP 群组当前名单的前缀数 |
+| `waf_ipgroup_checked_timestamp_seconds` | gauge | `group` | 每个 IP 群组最近一次检查的 Unix 时间 |
+| `waf_ipgroup_error` | gauge | `group` | 最近一次导入失败时为 1 |
+| `waf_ipgroup_pending` | gauge | `group` | 有待批准的更新时为 1 |
 
 计数器在 UI 重启后从 0 开始，用 `rate()`/`increase()` 查询。
 
@@ -51,3 +55,5 @@ Alloy 每 30 秒采集一次 `caddy-waf-ui:8080/metrics`。示例配置丢弃 `w
 | `increase(waf_ingest_errors_total{kind="store"}[15m]) > 0` | 事件无法写入 |
 | `increase(waf_reload_total{result="failed"}[1h]) > 0` | 有配置变更失败，到 **Rollback & History** 查看阶段和错误 |
 | `waf_policy_info{mode="Off"}` | 有站点关闭了 WAF |
+| `waf_ipgroup_error == 1` 持续 1 天以上 | IP 群组名单无法更新，仍在使用旧名单 |
+| `waf_ipgroup_pending == 1` | 有名单缩水的更新等待人工批准 |

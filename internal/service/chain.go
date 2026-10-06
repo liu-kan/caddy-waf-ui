@@ -45,6 +45,7 @@ func baselineOptions() waf.Options {
 		CRSSetup: config.CRSSetup(), CRSRules: config.CRSRules(),
 		BeforeFile: config.BeforeFile(), AfterFile: config.AfterFile(),
 		ResponseBodyAccess: config.ResponseBodyAccess(), AuditParts: config.AuditLogParts(),
+		IPGroupFiles: groupFiles(),
 	}
 }
 
@@ -449,6 +450,9 @@ func PolicySummary(p waf.Policy) string {
 	}
 	if len(p.DisabledGroups) > 0 {
 		s += ", disabled " + strings.Join(p.DisabledGroups, ",")
+	}
+	if n := len(p.IPGroups); n > 0 {
+		s += fmt.Sprintf(", %d IP group rule(s)", n)
 	}
 	return s
 }

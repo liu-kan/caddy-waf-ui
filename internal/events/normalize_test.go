@@ -212,3 +212,26 @@ func TestSplitLogdata(t *testing.T) {
 		t.Fatalf("truncate must respect UTF-8: %q", got)
 	}
 }
+
+func TestNormalizeAppliesIPGroupTuning(t *testing.T) {
+	sig := `caddy-waf-ui;v=1;site=example.com;rev=r1;mode=DetectionOnly;bpl=1;dpl=1;in=5;out=4;tune=1`
+	raw := `{"transaction":{"unix_timestamp":1791290317883451000,"id":"group-tune-1","client_ip":"203.0.113.9","server_id":"example.com",` +
+		`"request":{"method":"GET","uri":"/search?q=x"},"producer":{"rule_engine":"DetectionOnly","rulesets":["OWASP_CRS/4.25.0","` + sig + `"]},"is_interrupted":false},` +
+		`"messages":[` +
+		`{"actionset":"` + sig + `","data":{"id":9002503,"msg":"IP group policy: outside cn tune bpl=3 dpl=3 in=10 out=4"}},` +
+		`{"actionset":"` + sig + `","data":{"id":942100,"msg":"SQL Injection Attack Detected via libinjection","data":"Matched Data: s&1 found within ARGS:q: x","severity":2,"tags":["paranoia-level/1"]}},` +
+		`{"actionset":"` + sig + `","data":{"id":920350,"msg":"Host header is a numeric IP address","data":"Matched Data: 1.2.3.4 found within REQUEST_HEADERS:Host: 1.2.3.4","severity":4,"tags":["paranoia-level/1"]}}]}`
+	e, err := (&Normalizer{Dict: crs.Default()}).Normalize([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.BlockingPL != 3 || e.DetectionPL != 3 || e.ThrIn != 10 || e.ThrOut != 4 {
+		t.Fatalf("the group's thresholds must replace the site's: %+v", e)
+	}
+	if e.ScoreIn != 8 || e.Action != ActionDetected {
+		t.Fatalf("8 points stay below the group's threshold 10: score %d, action %s", e.ScoreIn, e.Action)
+	}
+	if !strings.Contains(e.Hits[0].Msg, "outside cn tune") {
+		t.Fatalf("the group rule keeps its specific message: %q", e.Hits[0].Msg)
+	}
+}

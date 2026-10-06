@@ -15,7 +15,7 @@ Alloy 只读取 UI 数据卷和日志目录（均只读挂载），配置见 `al
 | `access` | Caddy `access*.json`（示例 Caddyfile 中配置） | 站点、客户端 IP、对端 IP、方法、路径、状态码、耗时、大小 | 请求头、查询串、User-Agent |
 | `runtime` | Caddy `error*.json` | 时间、级别、logger | 消息正文 |
 
-`imported-*.jsonl`（从 Loki 导回本地的事件）、原始审计日志、快照和草稿都不在采集范围内。
+`imported-*.jsonl`（从 Loki 导回本地的事件）、本地事件文件、原始审计日志、快照和草稿都不在采集范围内。导出队列由 UI 写出，不上传云端的部署可以设 `CADDY_UI_CLOUD_EXPORT=false` 停止写出，见 [可配置脱敏](redaction.md#文件与查看)。
 
 索引标签只用取值有限的字段：所有流都有 `job="caddy-waf-ui"` 和 `kind`；`event` 另有 `site`、`action`、`node`；`change` 另有 `site`、`action`、`result`；`runtime` 另有 `level`。`event` 的 `tx`、`ip`、`rule_ids_csv`、`path`、`rev` 写入结构化元数据，不作为标签，避免产生大量时间序列。`access` 的 Host 不建标签（通配站点会收到任意 Host）。
 

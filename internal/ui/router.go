@@ -36,6 +36,13 @@ func NewRouter() *http.ServeMux {
 	mux.HandleFunc("GET /api/analysis", HandleAPIAnalysis)
 	mux.HandleFunc("POST /api/loki/backfill", HandleAPIBackfill)
 
+	// IP groups (sing-box rule-sets or CIDR lists) used by policy rules
+	mux.HandleFunc("GET /api/ipgroups", HandleAPIIPGroups)
+	mux.HandleFunc("GET /api/ipgroups/lookup", HandleAPIIPGroupLookup)
+	mux.HandleFunc("PUT /api/ipgroups/{name}", HandleAPIIPGroupPut)
+	mux.HandleFunc("DELETE /api/ipgroups/{name}", HandleAPIIPGroupDelete)
+	mux.HandleFunc("POST /api/ipgroups/{name}/{op}", HandleAPIIPGroupAction)
+
 	return mux
 }
 

@@ -95,6 +95,9 @@ var (
 	totalScore    = regexp.MustCompile(`Total Score: (\d+)`)
 	crsVersionTag = regexp.MustCompile(`OWASP_CRS/(\d+\.\d+\.\d+)`)
 	plTagPattern  = regexp.MustCompile(`^paranoia-level/([1-4])$`)
+	// groupTune is the message of an IP group tuning rule, which carries the
+	// levels and thresholds in force for the request (waf.renderGroups).
+	groupTune = regexp.MustCompile(`tune bpl=([1-4]) dpl=([1-4]) in=(\d{1,5}) out=(\d{1,5})$`)
 )
 
 // Normalize parses one JSON audit record.
@@ -199,6 +202,7 @@ func (n *Normalizer) normalize(rec *auditRecord) (*Event, error) {
 	if len(ids) == 0 {
 		e.RuleIDs = ""
 	}
+	e.applyGroupTuning()
 	e.computeScores()
 	e.Interrupted = interrupted(tx.IsInterrupted, tx.Action)
 	// An interruption without rule messages is still a block: the request
@@ -236,7 +240,8 @@ func (n *Normalizer) hit(id int, msg, logdata string, severity json.RawMessage, 
 		}
 	}
 	if ok {
-		if rule.Msg != "" {
+		// IP group rules keep their specific message (scope and values).
+		if rule.Msg != "" && rule.Category != "ui-ipgroup" {
 			h.Msg = rule.Msg
 		}
 		h.Kind, h.Dir, h.Category = rule.Kind, rule.Dir, rule.Category
@@ -290,6 +295,23 @@ func (e *Event) computeScores() {
 			if pl <= bpl {
 				e.ScoreIn += h.Score
 			}
+		}
+	}
+}
+
+// applyGroupTuning replaces the site thresholds of the signature with those
+// of the last IP group tuning rule that matched: later rules override
+// earlier ones, as in Coraza.
+func (e *Event) applyGroupTuning() {
+	for _, h := range e.Hits {
+		if h.ID < crs.UIGroupControlMin || h.ID > crs.UIGroupControlMax {
+			continue
+		}
+		if m := groupTune.FindStringSubmatch(h.Msg); m != nil {
+			e.BlockingPL, _ = strconv.Atoi(m[1])
+			e.DetectionPL, _ = strconv.Atoi(m[2])
+			e.ThrIn, _ = strconv.Atoi(m[3])
+			e.ThrOut, _ = strconv.Atoi(m[4])
 		}
 	}
 }

@@ -40,11 +40,20 @@ var funcMap = template.FuncMap{
 		}
 		return category
 	},
-	"slug": domain.DomainSlug,
-	"add":  func(a, b int) int { return a + b },
-	"sub":  func(a, b int) int { return a - b },
-	"mul":  func(a, b int) int { return a * b },
-	"list": func(values ...int) []int { return values },
+	"slug":    domain.DomainSlug,
+	"add":     func(a, b int) int { return a + b },
+	"sub":     func(a, b int) int { return a - b },
+	"mul":     func(a, b int) int { return a * b },
+	"list":    func(values ...int) []int { return values },
+	"strings": func(values ...string) []string { return values },
+	"contains": func(list []string, s string) bool {
+		for _, v := range list {
+			if v == s {
+				return true
+			}
+		}
+		return false
+	},
 	// fpExclusionURL opens the exclusions form prefilled with the narrowest
 	// scope of a false-positive candidate.
 	"fpExclusionURL": func(c analysis.FPCandidate) string {
@@ -55,7 +64,7 @@ var funcMap = template.FuncMap{
 // pageNames are the pages that define the "content" block over "base".
 // The file name matches the value of ?tab=.
 var pageNames = []string{"overview", "sites", "exclusions", "iprules", "logs", "rollback",
-	"events", "event", "rules", "analysis", "policy"}
+	"events", "event", "rules", "analysis", "policy", "ipgroups"}
 
 // templates contains a template set per page (base + content) and a
 // standalone template for login. They are parsed once when the package

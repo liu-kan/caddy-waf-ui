@@ -426,6 +426,8 @@ func NewPagesMux() *http.ServeMux {
 	mux.HandleFunc("POST /events/{tx}/feedback", HandleFormFeedback)
 	mux.HandleFunc("POST /sites/{domain}/iprules", HandleFormAddIPRule)
 	mux.HandleFunc("POST /sites/{domain}/rollback", HandleFormRollback)
+	mux.HandleFunc("POST /ipgroups", HandleFormIPGroupSave)
+	mux.HandleFunc("POST /ipgroups/{name}/{op}", HandleFormIPGroupAction)
 	mux.HandleFunc("POST /logout", HandleLogout)
 	return mux
 }

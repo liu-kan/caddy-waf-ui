@@ -22,13 +22,14 @@ func (in *Ingester) PollArchives() error {
 		if err := archived.Poll(); err != nil {
 			return err
 		}
-		// Keep a 48-hour grace period for late audit records from long requests.
-		// Retention is deliberate; this is not an exactly-once transport promise.
+		// Archives are kept for the retention period after their last write
+		// (at least the 48-hour grace for late records of long requests) and
+		// removed only once ingested. This is not an exactly-once promise.
 		fi, err := os.Stat(name)
 		if err != nil {
 			return err
 		}
-		if time.Since(fi.ModTime()) > 48*time.Hour && archived.Status().Offset == fi.Size() {
+		if time.Since(fi.ModTime()) > in.archiveRetention() && archived.Status().Offset == fi.Size() {
 			if err := os.Remove(name); err != nil {
 				return err
 			}
@@ -38,4 +39,12 @@ func (in *Ingester) PollArchives() error {
 		}
 	}
 	return nil
+}
+
+// MinArchiveRetention is the shortest archive retention: late records of
+// long requests are written to the renamed file for a while.
+const MinArchiveRetention = 48 * time.Hour
+
+func (in *Ingester) archiveRetention() time.Duration {
+	return max(in.ArchiveRetention, MinArchiveRetention)
 }

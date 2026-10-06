@@ -254,3 +254,28 @@ func redactionNames(key string) []string {
 	return strings.FieldsFunc(os.Getenv(key), func(r rune) bool { return r == ',' || r == ' ' || r == '\n' || r == '\t' })
 }
 func CloudDiskMaxBytes() int64 { return int64(positiveIntEnv("CADDY_UI_CLOUD_DISK_MAX_MB", 128)) << 20 }
+
+// CloudExport reports whether a separately redacted copy of every event is
+// queued for Alloy (CADDY_UI_CLOUD_EXPORT, default true). Deployments that
+// never ship to Grafana Cloud can turn it off to save disk and CPU.
+func CloudExport() bool { return os.Getenv("CADDY_UI_CLOUD_EXPORT") != "false" }
+
+// IPGroupDir returns CADDY_UI_IPGROUP_DIR (default /ipgroups): the
+// operator-mounted directory of file-based IP group sources.
+func IPGroupDir() string { return envOr("CADDY_UI_IPGROUP_DIR", "/ipgroups") }
+
+// IPGroupMaxPrefixes returns CADDY_UI_IPGROUP_MAX_PREFIXES (default
+// 100000): the largest IP group list. Coraza compares the client address
+// with every prefix of a list on each request that reaches a group rule.
+func IPGroupMaxPrefixes() int { return positiveIntEnv("CADDY_UI_IPGROUP_MAX_PREFIXES", 100000) }
+
+// IPGroupProxy returns CADDY_UI_IPGROUP_PROXY (default empty: the
+// HTTPS_PROXY/NO_PROXY environment): the proxy for IP group downloads only.
+func IPGroupProxy() string { return os.Getenv("CADDY_UI_IPGROUP_PROXY") }
+
+// AuditArchiveHours returns CADDY_UI_AUDIT_ARCHIVE_HOURS (default and
+// minimum 48): how long rotated raw audit archives stay available for the
+// on-demand local match context after their last write.
+func AuditArchiveHours() int {
+	return max(positiveIntEnv("CADDY_UI_AUDIT_ARCHIVE_HOURS", 48), 48)
+}

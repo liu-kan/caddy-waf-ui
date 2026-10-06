@@ -10,6 +10,10 @@
 # Local runtime config (keep Caddyfile.example tracked)
 Caddyfile
 
+# Operator IP group sources (keep the directory and its README tracked)
+/ipgroups/*
+!/ipgroups/README.md
+
 # Certificates and signing material
 *.pem
 *.key
