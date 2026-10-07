@@ -10,6 +10,7 @@ UI 的页面地址都是 `/?tab=<页面>`。登录与 API 共用一个令牌（`
 
 - [快速开始](quick-start.md)：用仓库自带的 Compose 示例跑起来。
 - [接入现有部署](deployment.md)：把边车并入已有的 caddy-with-auth 部署。
+- [使用 coraza-ipset 镜像部署](ipset-image-deployment.md)：逐步部署或切换到带 IP 匹配插件的镜像（`liukan/caddy-with-auth:coraza-plugins-ipset`），配置国家白名单、验证与回退。
 - [配置参考](configuration.md)：全部环境变量、默认值和作用。
 - [后端镜像](backend-image.md)：对镜像的要求、哪些改动走挂载、需要固化进镜像时怎么做、CRS 版本与规则字典。
 - [Grafana Cloud 与 Alloy](grafana-cloud.md)：上传哪些数据、令牌分权、免费层预算、本地查询云端历史。
@@ -35,4 +36,4 @@ UI 的页面地址都是 `/?tab=<页面>`。登录与 API 共用一个令牌（`
 - [IP 群组](ip-groups.md)：从 sing-box 规则集（.srs/JSON）或 CIDR 列表导入、定期更新的具名名单，以及按群组的拦截、封禁、试运行、引擎和阈值策略；国家白名单的性能与格式选择。
 - [变更历史与回滚](changes-and-rollback.md)：发布阶段、补偿回退、快照与 last_good。
 
-英文版说明见仓库根目录的 [README.md](../../README.md)、[LOCAL-CLOUD.md](../../LOCAL-CLOUD.md)、[INTEGRATION.md](../../INTEGRATION.md) 和 [ARCHITECTURE.md](../../ARCHITECTURE.md)。
+完整英文文档集详见 [documentation/en/README.md](../en/README.md)，仓库根目录另有架构与集成说明：[README.md](../../README.md)、[LOCAL-CLOUD.md](../../LOCAL-CLOUD.md)、[INTEGRATION.md](../../INTEGRATION.md) 和 [ARCHITECTURE.md](../../ARCHITECTURE.md)。

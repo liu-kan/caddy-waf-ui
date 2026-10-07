@@ -95,7 +95,7 @@ ban 不写审计记录，但 coraza-caddy 仍会为每个被拒请求在 Caddy �
 匹配速度取决于镜像：
 
 - **标准镜像**：Coraza 自带的 `@ipMatchFromFile` 对名单逐条比较，找到第一个匹配就停止。白名单规则对每个请求都执行：名单内的请求平均比较一半前缀后再经过 CRS，被封禁的请求要比较全部前缀，耗时与前缀数成正比。
-- **带 coraza-ipset 插件的 caddy-with-auth 镜像**：插件用有序区间二分查找替换同名 operator，规则和匹配结果不变，耗时与名单大小无关，见 [后端镜像](backend-image.md#ip-匹配插件coraza-ipset)。
+- **带 coraza-ipset 插件的 caddy-with-auth 镜像**（`liukan/caddy-with-auth:coraza-plugins-ipset`）：插件用有序区间二分查找替换同名 operator，规则和匹配结果不变，耗时与名单大小无关。插件说明见 [后端镜像](backend-image.md#ip-匹配插件coraza-ipset)，部署步骤见 [使用 coraza-ipset 镜像部署](ipset-image-deployment.md)。
 
 用 MetaCubeX 的国家名单，在同一台机器、同一份配置下对比两种实现（单核 Caddy，Apple M1 Max，本机回环，keep-alive，前缀数为合并后的数量）：
 

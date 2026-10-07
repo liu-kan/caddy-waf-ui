@@ -67,6 +67,7 @@ caddy-with-auth 仓库中的 `plugins/coraza-ipset` 是一个 Coraza 插件。�
 
 | 项目 | 说明 |
 | --- | --- |
+| 已发布镜像 | `liukan/caddy-with-auth:coraza-plugins-ipset`，部署与切换步骤见 [使用 coraza-ipset 镜像部署](ipset-image-deployment.md) |
 | 构建 | caddy-with-auth 的 Dockerfile 用 `xcaddy build --with github.com/liu-kan/caddy-with-auth/plugins/coraza-ipset=/build/plugins/coraza-ipset` 编入。编译前先用本次构建选用的 Coraza 版本运行插件测试：与 Coraza 原算法对照边界用例、随机名单和模糊输入 |
 | 确认 | `make crs-version` 的输出包含 `coraza-ipset`。CI 还会用临时容器检查 build info 和实际请求（`tests/test_coraza_ipset.py`） |
 | 回退 | 不带插件的镜像照常加载同样的 overlay，只是变回逐条比较。UI 不需要任何改动 |

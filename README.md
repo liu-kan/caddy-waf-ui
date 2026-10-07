@@ -4,7 +4,7 @@ A self-hosted management sidecar for [caddy-with-auth](https://github.com/liu-ka
 
 This fork is based on [Developmi/caddy-waf-ui](https://github.com/Developmi/caddy-waf-ui), under its original MIT license. It retains bearer/session authentication, CSRF protection, rate limiting, per-site mode controls, exclusions, IP lists, audit log search and typed rollback.
 
-Chinese documentation (中文文档): [documentation/zh/README.md](documentation/zh/README.md) covers deployment, configuration, the backend image, Grafana Cloud, every page and its REST API.
+Documentation: Full documentation is available in [English (documentation/en/)](documentation/en/README.md) and [Chinese (documentation/zh/)](documentation/zh/README.md), covering deployment, configuration, the backend image, Grafana Cloud, every page, and its REST API.
 
 ## Start the example
 
@@ -98,7 +98,7 @@ Site policies attach ordered rules to one or more groups, evaluated by Coraza wi
 
 Coraza's own `@ipMatchFromFile` compares the client address with the prefixes of a list until one matches, on every request. On one Caddy core (Apple M1 Max), an allowlist of CN and JP (26,730 merged prefixes) adds about 0.08 ms to an allowed request (0.38 ms through CRS) and bans a request in about 0.30 ms; adding US (281,382 prefixes) adds about 0.7 ms per allowed request and 2.7 ms per ban. With that image, keep a rule's list near 30,000 prefixes and ban large countries upstream (for example Cloudflare country rules).
 
-caddy-with-auth images that include its `coraza-ipset` plugin replace that operator with a binary search over sorted ranges, with the same rules and results: allowed requests cost the same as without a group rule and a ban takes about 0.055 ms, whatever the list size; a list is parsed once per process (about 2 MiB for CN, JP and US). `make crs-version` shows whether an image has it. The list format does not change any of this: `.srs`, JSON and text lists are expanded to the same prefixes. See the [Chinese guide](documentation/zh/ip-groups.md).
+caddy-with-auth images that include its `coraza-ipset` plugin replace that operator with a binary search over sorted ranges, with the same rules and results: allowed requests cost the same as without a group rule and a ban takes about 0.055 ms, whatever the list size; a list is parsed once per process (about 2 MiB for CN, JP and US). `make crs-version` shows whether an image has it. The list format does not change any of this: `.srs`, JSON and text lists are expanded to the same prefixes. See the [IP Groups guide](documentation/en/ip-groups.md) (or [Chinese guide](documentation/zh/ip-groups.md)).
 
 ## Development and verification
 

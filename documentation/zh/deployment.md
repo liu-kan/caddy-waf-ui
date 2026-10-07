@@ -30,7 +30,7 @@ chat.example.com {
 | --- | --- |
 | `CADDYFILE_PATH` | 你的 Caddyfile 在宿主机上的路径 |
 | `CADDY_UI_SITES` | 受管站点，逗号或空格分隔，例如 `chat.example.com,api.example.com` |
-| `CADDY_IMAGE` | 你正在使用的 caddy-with-auth 标签或 digest |
+| `CADDY_IMAGE` | 你正在使用的 caddy-with-auth 标签或 digest；带 IP 匹配插件的镜像见 [使用 coraza-ipset 镜像部署](ipset-image-deployment.md) |
 
 ```sh
 docker compose run --rm runtime-init

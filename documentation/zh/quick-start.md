@@ -40,4 +40,4 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost/.env
 - `.env` 里的 `CADDY_UI_PROBE_URLS={"localhost":"http://caddy"}` 让 UI 每次发布后对源站做一次请求验证，见 [站点与 WAF 模式](sites.md)。
 - 示例 Caddyfile 额外写了 `access.json` 和 `error.json`，只用于云端统计请求总量和运行错误；不需要上传时可以去掉。
 
-接入已有的 caddy-with-auth 部署见 [接入现有部署](deployment.md)。
+接入已有的 caddy-with-auth 部署见 [接入现有部署](deployment.md)。要用带 IP 匹配插件的镜像（IP 群组名单再大也不变慢），见 [使用 coraza-ipset 镜像部署](ipset-image-deployment.md)。
