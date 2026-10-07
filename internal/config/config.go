@@ -266,7 +266,8 @@ func IPGroupDir() string { return envOr("CADDY_UI_IPGROUP_DIR", "/ipgroups") }
 
 // IPGroupMaxPrefixes returns CADDY_UI_IPGROUP_MAX_PREFIXES (default
 // 100000): the largest IP group list. Coraza compares the client address
-// with every prefix of a list on each request that reaches a group rule.
+// with every prefix of a list on each request that reaches a group rule,
+// unless the backend image has the coraza-ipset plugin (binary search).
 func IPGroupMaxPrefixes() int { return positiveIntEnv("CADDY_UI_IPGROUP_MAX_PREFIXES", 100000) }
 
 // IPGroupProxy returns CADDY_UI_IPGROUP_PROXY (default empty: the

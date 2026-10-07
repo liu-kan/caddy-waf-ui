@@ -45,7 +45,7 @@ func baselineOptions() waf.Options {
 		CRSSetup: config.CRSSetup(), CRSRules: config.CRSRules(),
 		BeforeFile: config.BeforeFile(), AfterFile: config.AfterFile(),
 		ResponseBodyAccess: config.ResponseBodyAccess(), AuditParts: config.AuditLogParts(),
-		IPGroupFiles: groupFiles(),
+		IPGroupList: groupList,
 	}
 }
 

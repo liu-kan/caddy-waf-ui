@@ -71,11 +71,11 @@ func TestIPGroupPolicyLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := waf.DefaultPolicy()
-	p.IPGroups = []waf.IPGroupRule{{Group: "nowhere", Action: waf.GroupBlock}}
+	p.IPGroups = []waf.IPGroupRule{{Groups: []string{"nowhere"}, Action: waf.GroupBlock}}
 	if err := service.ApplyPolicy(actor, "example.com", p); err == nil {
 		t.Fatal("a rule for an unknown group must be rejected")
 	}
-	p.IPGroups = []waf.IPGroupRule{{Group: "office", Action: waf.GroupEngine, Engine: "Off"}}
+	p.IPGroups = []waf.IPGroupRule{{Groups: []string{"office"}, Action: waf.GroupEngine, Engine: "Off"}}
 	if err := service.ApplyPolicy(actor, "example.com", p); err != nil {
 		t.Fatal(err)
 	}
@@ -114,6 +114,54 @@ func TestIPGroupPolicyLifecycle(t *testing.T) {
 	}
 }
 
+func TestMergedListFollowsItsMemberGroups(t *testing.T) {
+	env := setupGroupEnv(t)
+	actor := service.Actor{User: "ops", Reason: "test"}
+	env.writeSource(t, "cn.txt", "203.0.113.0/25\n", time.Now().Add(-time.Hour))
+	env.writeSource(t, "jp.txt", "203.0.113.128/25\n", time.Now().Add(-time.Hour))
+	for _, name := range []string{"cn", "jp"} {
+		if _, err := service.PutIPGroup(context.Background(), actor, ipgroups.Definition{Name: name, Source: ipgroups.SourceFile, File: name + ".txt"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := service.ApplyMode(actor, "example.com", domain.ModeOn); err != nil {
+		t.Fatal(err)
+	}
+	p := waf.DefaultPolicy()
+	p.IPGroups = []waf.IPGroupRule{{Groups: []string{"jp", "cn"}, Negate: true, Action: waf.GroupBan}}
+	if err := service.ApplyPolicy(actor, "example.com", p); err != nil {
+		t.Fatal(err)
+	}
+	first, err := env.reg.ListPath([]string{"cn", "jp"})
+	if err != nil || !strings.Contains(overlay(t, env), `"!@ipMatchFromFile `+first+`"`) || !strings.Contains(overlay(t, env), "ctl:auditEngine=Off") {
+		t.Fatalf("the ban must match the merged list without recording: %q %v", first, err)
+	}
+	if _, err := os.Stat(filepath.Join(env.managedDir, "ipgroups", filepath.Base(first))); err != nil {
+		t.Fatalf("the merged list must be written for Caddy: %v", err)
+	}
+	for _, name := range []string{"cn", "jp"} {
+		if sites, err := service.IPGroupUsage(name); err != nil || len(sites) != 1 {
+			t.Fatalf("%s usage: %v %v", name, sites, err)
+		}
+	}
+	if err := service.DeleteIPGroup(actor, "jp"); !errors.Is(err, service.ErrIPGroupInUse) {
+		t.Fatalf("a member of a rule cannot be deleted: %v", err)
+	}
+
+	// A new list of one member republishes the site with a new merged list.
+	env.writeSource(t, "jp.txt", "203.0.113.128/25\n198.51.100.0/24\n", time.Now())
+	if changed, err := service.RefreshIPGroup(context.Background(), actor, "jp", false); err != nil || !changed {
+		t.Fatalf("refresh: %v %v", changed, err)
+	}
+	second, err := env.reg.ListPath([]string{"cn", "jp"})
+	if err != nil || second == first || !strings.Contains(overlay(t, env), second) {
+		t.Fatalf("the site must load the new merged list: %q %v", second, err)
+	}
+	if _, stale, err := service.IPGroupPublication(); err != nil || len(stale) != 0 {
+		t.Fatalf("nothing is stale after publishing: %v %v", stale, err)
+	}
+}
+
 func TestDraftIsStaleAfterAGroupListChanges(t *testing.T) {
 	env := setupGroupEnv(t)
 	env.writeSource(t, "a.txt", "192.0.2.0/24\n", time.Now().Add(-time.Hour))
@@ -124,7 +172,7 @@ func TestDraftIsStaleAfterAGroupListChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := waf.DefaultPolicy()
-	p.IPGroups = []waf.IPGroupRule{{Group: "a", Action: waf.GroupTrial}}
+	p.IPGroups = []waf.IPGroupRule{{Groups: []string{"a"}, Action: waf.GroupTrial}}
 	draft, err := service.CreatePolicyDraft("example.com", p)
 	if err != nil {
 		t.Fatal(err)
@@ -149,7 +197,7 @@ func TestGCIPGroupListsKeepsReferencedFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := waf.DefaultPolicy()
-	p.IPGroups = []waf.IPGroupRule{{Group: "a", Action: waf.GroupTrial}}
+	p.IPGroups = []waf.IPGroupRule{{Groups: []string{"a"}, Action: waf.GroupTrial}}
 	if err := service.ApplyPolicy(service.Actor{}, "example.com", p); err != nil {
 		t.Fatal(err)
 	}

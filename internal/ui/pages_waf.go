@@ -153,7 +153,8 @@ type policyForm struct {
 
 // ipGroupRuleForm is one row of the IP group rules editor, as typed.
 type ipGroupRuleForm struct {
-	Group, Match, Action, Engine               string
+	Groups                                     []string
+	Match, Action, Engine                      string
 	BlockingPL, DetectionPL, Inbound, Outbound string
 	Note                                       string
 }
@@ -259,9 +260,14 @@ func policyFormFromRequest(r *http.Request) policyForm {
 	count := min(atoiDefault(r.FormValue("ipg_count"), 0), waf.MaxIPGroupRules+blankIPGroupRows)
 	for i := 0; i < count; i++ {
 		field := func(name string) string { return strings.TrimSpace(r.FormValue("ipg_" + name + "_" + strconv.Itoa(i))) }
-		row := ipGroupRuleForm{Group: field("group"), Match: field("match"), Action: field("action"), Engine: field("engine"),
+		row := ipGroupRuleForm{Match: field("match"), Action: field("action"), Engine: field("engine"),
 			BlockingPL: field("bpl"), DetectionPL: field("dpl"), Inbound: field("in"), Outbound: field("out"), Note: field("note")}
-		if row.Group == "" || field("remove") != "" {
+		for _, name := range r.Form["ipg_group_"+strconv.Itoa(i)] {
+			if name = strings.TrimSpace(name); name != "" {
+				row.Groups = append(row.Groups, name)
+			}
+		}
+		if len(row.Groups) == 0 || field("remove") != "" {
 			continue
 		}
 		f.IPGroupRules = append(f.IPGroupRules, row)
@@ -276,7 +282,7 @@ func (f policyForm) Rows() []ipGroupRuleForm {
 
 // toRule converts a typed row; empty numbers mean "not set".
 func (row ipGroupRuleForm) toRule() (waf.IPGroupRule, error) {
-	rule := waf.IPGroupRule{Group: row.Group, Negate: row.Match == "outside", Action: row.Action, Note: row.Note}
+	rule := waf.IPGroupRule{Groups: row.Groups, Negate: row.Match == "outside", Action: row.Action, Note: row.Note}
 	if rule.Action == waf.GroupEngine {
 		rule.Engine = row.Engine
 	}
@@ -303,7 +309,7 @@ func (row ipGroupRuleForm) toRule() (waf.IPGroupRule, error) {
 }
 
 func ruleFormFrom(rule waf.IPGroupRule) ipGroupRuleForm {
-	row := ipGroupRuleForm{Group: rule.Group, Match: "inside", Action: rule.Action, Engine: rule.Engine, Note: rule.Note}
+	row := ipGroupRuleForm{Groups: rule.Groups, Match: "inside", Action: rule.Action, Engine: rule.Engine, Note: rule.Note}
 	if rule.Negate {
 		row.Match = "outside"
 	}

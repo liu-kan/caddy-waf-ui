@@ -2,6 +2,43 @@
 
 Runs are listed newest first. No run modified or rebuilt the backend image (`liukan/caddy-with-auth:latest`, local image `3a4bf970ed0c`).
 
+## 2026-10-06 coraza-ipset: binary search for IP lists
+
+caddy-with-auth gained a Coraza operator plugin (`plugins/coraza-ipset`) that replaces `@ipMatchFromFile` and `@ipMatchF` with a binary search over sorted ranges. The UI and its overlays are unchanged.
+
+| Check | Result and scope |
+| --- | --- |
+| Plugin tests | Edge cases, 30 random rounds, fuzz seeds, both operator names replaced, the shared list released after the last WAF closes, relative paths, missing file: passed on Coraza v3.8.0 and v3.8.1 with the race detector; golangci-lint 0 issues |
+| Fuzzing | 933,409 executions in 60 seconds, no difference from Coraza's algorithm |
+| Mutation checks | Removing the IPv4-mapped mask handling or the operator registration fails the tests |
+| Coraza drift guard | The `ipMatch` sources of v3.8.1 equal v3.8.0; the image build runs the hash test against the Coraza it links |
+| Lookup cost | 67 ns for 10,000 networks and 82 ns for 280,000, against 96 µs and 2.18 ms for Coraza's scan. Parsing 280,000 networks takes about 90 ms. Retained memory is 0.31 MiB for CN+JP and 1.97 MiB for CN+JP+US, shared per process |
+| Native Caddy, same configuration, one core | Banned requests: 3,333/s to 18,254/s (CN+JP) and 364/s to 18,236/s (CN+JP+US). Allowed requests: 2,191/s to 2,658/s and 940/s to 2,686/s, equal to a site without a group rule (2,648/s) |
+| UI native tests with the plugin build | `TestRealCaddyIPGroupRules` and `TestRealCaddyWAFUpdatesAndStreaming` passed unchanged |
+| Image build (`docker build --target final`) | Go 1.27.1, Caddy v2.11.7, coraza-caddy v2.6.1, Coraza v3.8.1, CRS v4.25.0. The plugin tests (drift test included), the dependency check and the plugin assertion passed in the builder |
+| Image tests | `tests/test_coraza_ipset.py` passed 4 of 4 and `tests/test_coraza_cves.py` 2 of 2 on the new image. On the old image the request tests also pass and only the build-info check fails |
+| Compose e2e with the new image | URL groups `jp` and `cn` with a ban outside both: JP and CN clients (IPv4, IPv6, IPv4-mapped) 200, US and DE 403, a JP client requesting `/.env` 403 by CRS. All publish stages succeeded; bans left no audit record and no CRS reporting error. Banned requests ran at 8,400/s against 2,835/s on the old image (one-CPU Caddy through Docker port forwarding) |
+| Rollback | The old image loaded the same overlays and lists, returned the same results, and a later publish succeeded |
+| UI image | Alpine v3.23 replaced tzdata 2026d-r0 with 2026e-r0; the pin was updated so the image builds again |
+
+## 2026-10-06 lint tools, public lists and country allowlists
+
+This run installed the pinned quality tools, imported real country lists from public URLs, added multi-group rules and the `ban` action for country allowlists, and measured IP matching cost.
+
+| Check | Result and scope |
+| --- | --- |
+| Quality tools | `make tools`: actionlint 1.7.12, hadolint 2.15.1 and golangci-lint 2.12.2 sha256-verified, govulncheck 1.7.0 through the Go checksum database; yamllint 1.38.0 and zizmor 1.29.0 through uv |
+| `make lint` | Passed: yamllint, actionlint, zizmor, hadolint (one info-level DL3066 note under the warning threshold) and golangci-lint with 0 issues. The pinned golangci-lint (built with go1.26.2) could not type-check the local go1.27.0 standard library; `make lint-go` and the CI lint job now run it on the `go.mod` toolchain |
+| `make vuln` | No vulnerabilities, with the go1.27.0 and go1.26.6 standard libraries |
+| gofmt / go vet / `go test -race ./...` | Passed, all packages, including the native Caddy tests |
+| Public rule-sets | MetaCubeX `geoip/jp.srs` (68,673 bytes) and `cn.srs` (36,417 bytes), rule-set version 2: parsed prefixes equal sing-box's own decoding (17,385 and 9,648). A refresh revalidated with the ETag (HTTP 304, no republish); a forced download found the same content |
+| Native Caddy test | A `ban` outside two groups passed their clients, denied others with 403 before CRS and wrote no audit record. Without the fix below, the test fails on CRS reporting errors in the Caddy log |
+| CRS reporting errors | A request denied in phase 1 never runs the CRS initialization, and rule 980099 then logged three errors per request. Block and ban rules and the On-mode origin probe now start the four CRS anomaly scores at 0; no CRS rule is skipped. A DetectionOnly would-be ban still recorded its full CRS detection (920350, 930130, 949110); one coraza-caddy line per denied request remains |
+| Real-image Compose run | The container downloaded both URL groups. One `ban` rule outside `cn` and `jp`: JP and CN clients (IPv4 and IPv6) 200, US and DE clients 403 with no event or audit record, a JP client requesting `/.env` still blocked by CRS. Validate, load, readback and request stages succeeded in On and DetectionOnly; DetectionOnly recorded the would-be ban. The IP Groups and Policy pages showed the URL groups and the two-group rule |
+| Matching cost (one Caddy core, Apple M1 Max, loopback) | A normal request through CRS: about 0.41 ms. Allowlist of CN+JP (26,730 merged prefixes): 0.50 ms per allowed request, 0.31 ms per ban; CN+JP+US (281,382): 1.14 ms per allowed request, 2.9 ms per ban. Zeroing the scores costs about 4 µs per ban over skipping the 980 rules. Per lookup over CN+JP+US: Coraza `@ipMatch` 2.9 ms, Caddy `client_ip` 1.1 ms, sorted ranges 55 ns, an MMDB-layout trie 80 ns |
+
+Not exercised: the real Grafana Cloud tenant (no credentials). The disposable Compose project, its volumes and networks were removed.
+
 ## 2026-10-06 redaction review and IP groups
 
 This run reviewed the configurable redaction round (commits 1343f53 and f4a6865), completed the paused items and added IP groups.

@@ -158,10 +158,10 @@ http://example.com:%s {
 	}
 	p := waf.DefaultPolicy()
 	p.IPGroups = []waf.IPGroupRule{
-		{Group: "scanners", Action: waf.GroupBlock},
-		{Group: "office", Action: waf.GroupEngine, Engine: "DetectionOnly"},
-		{Group: "partners", Action: waf.GroupTune, InboundThreshold: 100},
-		{Group: "trialnet", Action: waf.GroupTrial},
+		{Groups: []string{"scanners"}, Action: waf.GroupBlock},
+		{Groups: []string{"office"}, Action: waf.GroupEngine, Engine: "DetectionOnly"},
+		{Groups: []string{"partners"}, Action: waf.GroupTune, InboundThreshold: 100},
+		{Groups: []string{"trialnet"}, Action: waf.GroupTrial},
 	}
 	if err := service.ApplyPolicy(actor, "example.com", p); err != nil {
 		t.Fatal(err)
@@ -202,5 +202,45 @@ http://example.com:%s {
 	}
 	if got := status("/.env", "100.64.1.5"); got != 200 {
 		t.Fatalf("the refreshed office list must apply: got %d", got)
+	}
+
+	// Ban every client outside office and partners: one rule over their
+	// merged list, without an audit record.
+	before, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.IPGroups = []waf.IPGroupRule{{Groups: []string{"partners", "office"}, Negate: true, Action: waf.GroupBan}}
+	if err := service.ApplyPolicy(actor, "example.com", p); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		visitor string
+		want    int
+	}{
+		{"100.64.1.5", 200},   // office
+		{"10.10.3.4", 200},    // partners
+		{"198.51.100.8", 403}, // neither: banned before CRS
+		{"203.0.113.5", 403},
+	} {
+		if got := status("/normal", c.visitor); got != c.want {
+			t.Fatalf("ban outside office and partners, %s: got %d, want %d", c.visitor, got, c.want)
+		}
+	}
+	after, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(after[len(before):]), "banned") {
+		t.Fatal("a ban must not write an audit record")
+	}
+	// Requests denied before the CRS initialization must not make the CRS
+	// reporting rules log errors about unset anomaly scores.
+	logged, err := os.ReadFile(filepath.Join(tmp, "caddy.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(logged), "outbound_anomaly_score") {
+		t.Fatal("denied requests must not log CRS reporting errors")
 	}
 }

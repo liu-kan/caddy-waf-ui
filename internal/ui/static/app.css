@@ -421,6 +421,15 @@ header.header-container {
   margin: 0;
 }
 
+/* IP group rules editor: controls keep a readable width; the table scrolls. */
+.table-ipgroups select { min-width: 8.5rem; margin-bottom: 0; }
+.table-ipgroups select[multiple] { min-width: 7rem; padding: 0.25rem; background-image: none; }
+.table-ipgroups select[multiple] option { padding: 0.15rem 0.4rem; border-radius: 0.25rem; }
+/* The gradient makes Chromium paint the selection of an unfocused list. */
+.table-ipgroups select[multiple] option:checked { background: #047857 linear-gradient(#047857, #047857); color: #ffffff; }
+.table-ipgroups input[type="number"] { min-width: 5.5rem; margin-bottom: 0; }
+.table-ipgroups input[type="text"] { min-width: 10rem; margin-bottom: 0; }
+
 .table-empty {
   text-align: center;
   color: #94a3b8;

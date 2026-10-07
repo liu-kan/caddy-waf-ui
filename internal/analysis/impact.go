@@ -182,23 +182,27 @@ func Estimate(evs []*events.Event, profiles []SourceProfile, dict *crs.Dictionar
 		im.Caveats = append(im.Caveats, "tag exclusions cannot be evaluated for rules outside the dictionary (custom rules)")
 	}
 	if change.Policy != nil && len(change.Policy.IPGroups) > 0 {
-		blocks := false
+		blocks, bans := false, false
 		for _, g := range change.Policy.IPGroups {
-			blocks = blocks || g.Action == waf.GroupBlock
+			blocks = blocks || g.Action == waf.GroupBlock || g.Action == waf.GroupBan
+			bans = bans || g.Action == waf.GroupBan
 		}
 		switch {
 		case change.Member == nil:
 			im.Caveats = append(im.Caveats, "IP group rules cannot be estimated without the group lists")
 		case blocks:
-			im.Caveats = append(im.Caveats, "IP group block rules apply to every request of a group, but the history only holds audited requests: add the rule as trial first to record the traffic it would block")
+			im.Caveats = append(im.Caveats, "IP group block and ban rules apply to every request of a group, but the history only holds audited requests: add the rule as trial first to record the traffic it would deny")
+		}
+		if bans {
+			im.Caveats = append(im.Caveats, "requests denied by a ban rule are not recorded, so later history and estimates do not include them; the access log still counts them")
 		}
 	}
 	return im
 }
 
 // applyGroups applies the policy's IP group rules to one event in order.
-// It returns a forced outcome for a block rule, or the parameters that the
-// engine and tuning rules leave for the score model.
+// It returns a forced outcome for a block or ban rule, or the parameters
+// that the engine and tuning rules leave for the score model.
 func applyGroups(e *events.Event, p waf.Policy, member func(string, netip.Addr) bool, bpl, in, out int, mode string) (string, int, int, int, string) {
 	ip, err := netip.ParseAddr(e.ClientIP)
 	if err != nil {
@@ -208,11 +212,18 @@ func applyGroups(e *events.Event, p waf.Policy, member func(string, netip.Addr) 
 		if strings.EqualFold(mode, "off") {
 			break
 		}
-		if member(g.Group, ip) == g.Negate {
+		inside := false
+		for _, name := range g.Groups {
+			if member(name, ip) {
+				inside = true
+				break
+			}
+		}
+		if inside == g.Negate {
 			continue
 		}
 		switch g.Action {
-		case waf.GroupBlock:
+		case waf.GroupBlock, waf.GroupBan:
 			if strings.EqualFold(mode, "on") {
 				return OutcomeBlocked, bpl, in, out, mode
 			}

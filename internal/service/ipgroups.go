@@ -35,11 +35,14 @@ func SetIPGroups(r *ipgroups.Registry) { ipGroups.Store(r) }
 // IPGroups returns the registry, or nil when it is not configured.
 func IPGroups() *ipgroups.Registry { return ipGroups.Load() }
 
-func groupFiles() map[string]string {
-	if r := IPGroups(); r != nil {
-		return r.ActiveFiles()
+// groupList resolves the groups of a rule to the list file Caddy reads,
+// writing a merged list of several groups when needed.
+func groupList(groups []string) (string, error) {
+	r := IPGroups()
+	if r == nil {
+		return "", ErrIPGroupsUnavailable
 	}
-	return nil
+	return r.EnsureList(groups)
 }
 
 func groupDigest() string {
@@ -62,7 +65,7 @@ func IPGroupUsage(name string) ([]string, error) {
 			return nil, err
 		}
 		for _, rule := range state.Policy.IPGroups {
-			if rule.Group == name {
+			if slices.Contains(rule.Groups, name) {
 				out = append(out, site.Domain)
 				break
 			}
@@ -81,7 +84,7 @@ func IPGroupPublication() (usage, stale map[string][]string, err error) {
 	if err != nil {
 		return usage, stale, err
 	}
-	active := groupFiles()
+	r := IPGroups()
 	for _, site := range sites {
 		state, err := ReadSiteState(site.Domain)
 		if err != nil {
@@ -91,15 +94,22 @@ func IPGroupPublication() (usage, stale map[string][]string, err error) {
 		if err != nil {
 			return usage, stale, err
 		}
-		seen := map[string]bool{}
+		used, behind := map[string]bool{}, map[string]bool{}
 		for _, rule := range state.Policy.IPGroups {
-			if seen[rule.Group] {
-				continue
+			var path string
+			if r != nil {
+				path, _ = r.ListPath(rule.Groups)
 			}
-			seen[rule.Group] = true
-			usage[rule.Group] = append(usage[rule.Group], site.Domain)
-			if path, ok := active[rule.Group]; !ok || !strings.Contains(string(content), path) {
-				stale[rule.Group] = append(stale[rule.Group], site.Domain)
+			current := path != "" && strings.Contains(string(content), path)
+			for _, name := range rule.Groups {
+				used[name] = true
+				behind[name] = behind[name] || !current
+			}
+		}
+		for name := range used {
+			usage[name] = append(usage[name], site.Domain)
+			if behind[name] {
+				stale[name] = append(stale[name], site.Domain)
 			}
 		}
 	}

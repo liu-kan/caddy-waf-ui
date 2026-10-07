@@ -293,6 +293,65 @@ func TestGCKeepsListsInUse(t *testing.T) {
 	}
 }
 
+func TestMergedListsOfSeveralGroups(t *testing.T) {
+	env := newTestEnv(t)
+	env.writeSource(t, "a.txt", "192.0.2.0/25\n")
+	env.writeSource(t, "b.txt", "192.0.2.128/25\n2001:db8::/32\n")
+	r := env.open(t)
+	ctx := context.Background()
+	var active string
+	for _, name := range []string{"a", "b"} {
+		g, err := r.Put(ctx, Definition{Name: name, Source: SourceFile, File: name + ".txt"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if name == "a" {
+			active = g.Active.File
+		}
+	}
+	if path, err := r.ListPath([]string{"a"}); err != nil || path != env.opts.CaddyDir+"/"+active {
+		t.Fatalf("a single group reads its active list: %q %v", path, err)
+	}
+	path, err := r.ListPath([]string{"a", "b"})
+	if err != nil || !strings.HasPrefix(path, env.opts.CaddyDir+"/_union.") {
+		t.Fatalf("several groups read a merged list: %q %v", path, err)
+	}
+	local := filepath.Join(env.opts.ListDir, filepath.Base(path))
+	if _, err := os.Stat(local); !os.IsNotExist(err) {
+		t.Fatalf("ListPath must not write: %v", err)
+	}
+	if again, err := r.EnsureList([]string{"a", "b"}); err != nil || again != path {
+		t.Fatalf("EnsureList: %q %v", again, err)
+	}
+	content, err := os.ReadFile(local)
+	if err != nil || !strings.HasPrefix(string(content), "# caddy-waf-ui IP group a+b: 2 prefixes (1 IPv4, 1 IPv6)") ||
+		!strings.Contains(string(content), "\n192.0.2.0/24\n2001:db8::/32\n") {
+		t.Fatalf("the merged list joins adjacent ranges: %q %v", content, err)
+	}
+	if _, err := r.ListPath([]string{"a", "missing"}); err == nil || !strings.Contains(err.Error(), "missing") {
+		t.Fatalf("a group without an active list fails: %v", err)
+	}
+	// A new active list of a member yields a new merged list.
+	env.writeSource(t, "b.txt", "198.51.100.0/24\n")
+	if changed, err := r.Refresh(ctx, "b", false); err != nil || !changed {
+		t.Fatalf("refresh: %v %v", changed, err)
+	}
+	if next, err := r.ListPath([]string{"a", "b"}); err != nil || next == path {
+		t.Fatalf("the merged list follows its members: %q %v", next, err)
+	}
+	// Unreferenced merged lists are collected like old group lists.
+	past := env.now.Add(-48 * time.Hour)
+	if err := os.Chtimes(local, past, past); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.GC(nil, 24*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(local); !os.IsNotExist(err) {
+		t.Fatalf("an unreferenced merged list must be collected: %v", err)
+	}
+}
+
 func TestTickReportsChangedGroups(t *testing.T) {
 	env := newTestEnv(t)
 	env.writeSource(t, "a.txt", "192.0.2.0/24\n")

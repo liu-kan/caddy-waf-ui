@@ -48,8 +48,8 @@ jobs:
       - name: Lint Actions Security
         run: uv run zizmor .
 
-      # No setup-go: the runner ships a Go toolchain and go.mod pins
-      # `toolchain go1.26.6`, so Go auto-downloads it (GOTOOLCHAIN=auto
-      # is the default). golangci-lint uses that toolchain.
+      # No setup-go: make lint-go runs golangci-lint on the go.mod
+      # toolchain (GOTOOLCHAIN), which Go downloads on first use, so a newer
+      # runner Go cannot break type-checking.
       - name: Lint Go
-        run: tools/bin/golangci-lint run ./...
+        run: make lint-go

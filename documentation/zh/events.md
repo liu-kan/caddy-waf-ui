@@ -74,7 +74,7 @@ UI 每 2 秒（`CADDY_UI_INGEST_INTERVAL`）读取一次审计日志，把新记
 
 ## IP 群组
 
-客户端 IP 属于某些 [IP 群组](ip-groups.md) 时，事件标题下显示 **Client IP groups**，点击可查看该地址的群组归属。群组规则的命中也出现在规则列表中：9002000 起为拦截和试运行（"IP group policy: inside office blocked"、"IP group policy (trial): … would be blocked"），9002500 起为引擎和阈值调整。阈值调整规则带有当时生效的 PL 和阈值，事件按这些值计分和判定。
+客户端 IP 属于某些 [IP 群组](ip-groups.md) 时，事件标题下显示 **Client IP groups**，点击可查看该地址的群组归属。群组规则的命中也出现在规则列表中：9002000 起为拦截和试运行（"IP group policy: inside office blocked"、"IP group policy (trial): outside cn+jp would be blocked"），9002500 起为引擎和阈值调整。阈值调整规则带有当时生效的 PL 和阈值，事件按这些值计分和判定。ban 规则拒绝的请求不产生事件（DetectionOnly 站点除外，记录为"… banned"的将拦截事件）。
 
 ## 人工判定
 

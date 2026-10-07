@@ -1,6 +1,6 @@
 # 后端镜像
 
-后端使用 [liukan/caddy-with-auth](https://github.com/liu-kan/caddy-with-auth)，原样运行，不需要重新构建。UI 需要的所有配置都通过挂载文件提供；只有想做"不可变镜像"部署，或升级了镜像里的 Coraza/CRS 时，才需要按本文处理。
+后端使用 [liukan/caddy-with-auth](https://github.com/liu-kan/caddy-with-auth)，原样运行，不需要重新构建。UI 需要的所有配置都通过挂载文件提供；只有想做"不可变镜像"部署、升级了镜像里的 Coraza/CRS，或需要 [IP 匹配插件](#ip-匹配插件coraza-ipset) 时，才需要按本文处理。
 
 ## 对镜像的要求
 
@@ -10,6 +10,7 @@
 | 标准 Admin API（`/load`、`/config/`） | 发布配置、回读 revision | 默认具备 |
 | 支持 `log_append` 指令 | 示例 Caddyfile 用它把请求路径写进访问日志；不上传访问日志时可去掉该行 | `caddy validate` 通过 |
 | 以 UID/GID 65532 运行 | 与 UI 共享 overlay、审计目录和 Admin socket 的权限 | DHI 运行时默认如此 |
+| 可选：coraza-ipset 插件 | IP 群组规则用二分查找匹配，名单再大也不变慢 | `caddy build-info \| grep coraza-ipset` |
 
 已验证的版本组合（`liukan/caddy-with-auth:latest`，镜像 ID `3a4bf970ed0c`）：Caddy 2.11.6、coraza-caddy/v2 2.6.1、Coraza 3.8.0、coraza-coreruleset 4.25.0（即 CRS 4.25.0）。查看当前镜像：
 
@@ -18,7 +19,7 @@ make crs-version                      # 默认读取 CADDY_IMAGE，未设置时�
 CADDY_IMAGE=caddy-with-auth:pinned make crs-version
 ```
 
-输出 Caddy、coraza-caddy、Coraza 和 coraza-coreruleset 四个模块的版本。
+输出 Caddy、coraza-caddy、Coraza 和 coraza-coreruleset 的版本；镜像带 coraza-ipset 插件时也会列出它。
 
 ## 全部改动都走挂载
 
@@ -53,6 +54,23 @@ COPY --chown=65532:65532 --chmod=0640 waf-custom/ /etc/caddy/waf-custom/
 1. **UI 必须拿到同一份 Caddyfile。** UI 重载时把自己读到的 Caddyfile 全文发给 `/load`。镜像里的文件和 UI 挂载的文件不一致时，第一次通过 UI 发布就会把线上配置换成 UI 那一份。两边用同一个文件来源，并在构建派生镜像时同步更新。
 2. **overlay 目录不能打进镜像。** `/etc/caddy/ui-managed` 必须是 UI 可写、Caddy 可读的共享卷。
 3. **改了 `waf-custom` 后要在 UI 里重新应用一次该站点的模式**，生成新的 revision，Coraza 才会重新加载这些 include。
+
+## IP 匹配插件（coraza-ipset）
+
+caddy-with-auth 仓库中的 `plugins/coraza-ipset` 是一个 Coraza 插件。编进镜像后，它替换 Coraza 自带的 `@ipMatchFromFile`（及别名 `@ipMatchF`）：名单存成合并后的有序区间，用二分查找匹配。
+
+- IP 群组规则不用改，匹配结果与 Coraza 原实现逐条一致。
+- 每个请求的耗时与名单大小无关。
+- 同一份名单在整个进程里只解析、存储一次。
+
+性能对比见 [IP 群组](ip-groups.md#性能与名单规模)。
+
+| 项目 | 说明 |
+| --- | --- |
+| 构建 | caddy-with-auth 的 Dockerfile 用 `xcaddy build --with github.com/liu-kan/caddy-with-auth/plugins/coraza-ipset=/build/plugins/coraza-ipset` 编入。编译前先用本次构建选用的 Coraza 版本运行插件测试：与 Coraza 原算法对照边界用例、随机名单和模糊输入 |
+| 确认 | `make crs-version` 的输出包含 `coraza-ipset`。CI 还会用临时容器检查 build info 和实际请求（`tests/test_coraza_ipset.py`） |
+| 回退 | 不带插件的镜像照常加载同样的 overlay，只是变回逐条比较。UI 不需要任何改动 |
+| 升级 Coraza | Coraza 修改了实现 `ipMatch` 的源码时，插件测试会让镜像构建失败，防止插件与新版行为悄悄出现差异。对照改动更新插件，再更新 `ipset_test.go` 中记录的源码哈希 |
 
 ## 升级 Coraza 或 CRS 时
 

@@ -83,7 +83,10 @@ func (p Policy) Normalize() Policy {
 	} else {
 		groups := make([]IPGroupRule, len(p.IPGroups))
 		for i, g := range p.IPGroups {
-			g.Group, g.Action, g.Engine, g.Note = strings.TrimSpace(g.Group), strings.TrimSpace(g.Action), strings.TrimSpace(g.Engine), strings.TrimSpace(g.Note)
+			g.Action, g.Engine, g.Note = strings.TrimSpace(g.Action), strings.TrimSpace(g.Engine), strings.TrimSpace(g.Note)
+			// Sorted and unique: a rule over the same groups renders the
+			// same merged list.
+			g.Groups = canonicalList(g.Groups, strings.TrimSpace)
 			groups[i] = g
 		}
 		p.IPGroups = groups

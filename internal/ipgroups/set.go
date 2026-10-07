@@ -143,6 +143,18 @@ func merge(in []span) []span {
 	return out
 }
 
+// Union returns the addresses held by any of the sets.
+func Union(sets ...*Set) *Set {
+	var b Builder
+	for _, s := range sets {
+		if s != nil {
+			b.v4 = append(b.v4, s.v4...)
+			b.v6 = append(b.v6, s.v6...)
+		}
+	}
+	return b.Set()
+}
+
 // Set is an immutable set of addresses: sorted, merged ranges per family.
 type Set struct{ v4, v6 []span }
 

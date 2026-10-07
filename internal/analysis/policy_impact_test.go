@@ -34,7 +34,7 @@ func TestEstimateAppliesIPGroupRules(t *testing.T) {
 	history := []*events.Event{inside, outside, grouped}
 
 	relax := waf.DefaultPolicy()
-	relax.IPGroups = []waf.IPGroupRule{{Group: "cn", Action: waf.GroupTune, InboundThreshold: 10}}
+	relax.IPGroups = []waf.IPGroupRule{{Groups: []string{"cn"}, Action: waf.GroupTune, InboundThreshold: 10}}
 	im := Estimate(history, nil, crs.Default(), Change{Policy: &relax, Member: member})
 	if im.Unblocked != 2 || im.NewlyBlocked != 0 {
 		t.Fatalf("relaxing members unblocks their event and dropping the old group rule unblocks its event: %+v", im)
@@ -46,7 +46,7 @@ func TestEstimateAppliesIPGroupRules(t *testing.T) {
 	}
 
 	block := waf.DefaultPolicy()
-	block.IPGroups = []waf.IPGroupRule{{Group: "cn", Negate: true, Action: waf.GroupBlock}}
+	block.IPGroups = []waf.IPGroupRule{{Groups: []string{"cn"}, Negate: true, Action: waf.GroupBlock}}
 	im = Estimate(history, nil, crs.Default(), Change{Policy: &block, Member: member})
 	if im.NewlyBlocked != 1 || im.Unblocked != 0 {
 		t.Fatalf("blocking non-members blocks the passed outside event and keeps the old block: %+v", im)
@@ -55,8 +55,25 @@ func TestEstimateAppliesIPGroupRules(t *testing.T) {
 		t.Fatalf("block rules must point to trial mode: %v", im.Caveats)
 	}
 
+	// A ban outside cn and jp keeps members of either group.
+	jp := netip.MustParsePrefix("198.51.100.0/24")
+	both := func(group string, ip netip.Addr) bool { return member(group, ip) || group == "jp" && jp.Contains(ip) }
+	ban := waf.DefaultPolicy()
+	ban.IPGroups = []waf.IPGroupRule{{Groups: []string{"cn", "jp"}, Negate: true, Action: waf.GroupBan}}
+	im = Estimate(history, nil, crs.Default(), Change{Policy: &ban, Member: both})
+	if im.NewlyBlocked != 0 || im.Unblocked != 0 {
+		t.Fatalf("the outside event passes as a jp member; the old block stays: %+v", im)
+	}
+	if !hasCaveat(im, "not recorded") {
+		t.Fatalf("ban rules must say that denied requests leave no history: %v", im.Caveats)
+	}
+	im = Estimate(history, nil, crs.Default(), Change{Policy: &ban, Member: member})
+	if im.NewlyBlocked != 1 {
+		t.Fatalf("without jp the outside event is banned: %+v", im)
+	}
+
 	trusted := waf.DefaultPolicy()
-	trusted.IPGroups = []waf.IPGroupRule{{Group: "cn", Action: waf.GroupEngine, Engine: "Off"}}
+	trusted.IPGroups = []waf.IPGroupRule{{Groups: []string{"cn"}, Action: waf.GroupEngine, Engine: "Off"}}
 	if im = Estimate([]*events.Event{inside}, nil, crs.Default(), Change{Policy: &trusted, Member: member}); im.Unblocked != 1 {
 		t.Fatalf("an Off engine rule passes its members: %+v", im)
 	}

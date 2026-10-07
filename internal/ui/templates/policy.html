@@ -81,30 +81,31 @@
   </div>
   <h2 class="card-title card-title-spaced">IP group rules</h2>
   <p class="u-text-sm">
-    Applied in order to clients inside or outside an IP group, before the CRS rules: <strong>block</strong> denies with 403;
+    Applied in order before the CRS rules, to clients inside any of the selected IP groups or outside all of them
+    (select several to allow a set of countries, for example): <strong>block</strong> denies with 403 and records the request;
+    <strong>ban</strong> denies with 403 without recording it, for high-volume allowlists (the access log still counts it);
     <strong>trial</strong> only records the requests a block would deny (use it first: it shows the real traffic of the group);
     <strong>engine</strong> switches the rule engine; <strong>tune</strong> changes paranoia levels and thresholds
     (empty values keep the site policy). Groups are managed on <a href="/?tab=ipgroups">IP Groups</a>.
   </p>
   <input type="hidden" name="ipg_count" value="{{ len .PolicyForm.Rows }}">
   <div class="table-scroll">
-    <table class="table-compact u-text-md">
-      <thead><tr><th scope="col">#</th><th scope="col">Group</th><th scope="col">Clients</th><th scope="col">Action</th><th scope="col">Engine</th><th scope="col">Blocking PL</th><th scope="col">Detection PL</th><th scope="col">Inbound</th><th scope="col">Outbound</th><th scope="col">Note</th><th scope="col">Remove</th></tr></thead>
+    <table class="table-compact table-ipgroups u-text-md">
+      <thead><tr><th scope="col">#</th><th scope="col">Groups</th><th scope="col">Clients</th><th scope="col">Action</th><th scope="col">Engine</th><th scope="col">Blocking PL</th><th scope="col">Detection PL</th><th scope="col">Inbound</th><th scope="col">Outbound</th><th scope="col">Note</th><th scope="col">Remove</th></tr></thead>
       <tbody>
         {{ range $i, $row := .PolicyForm.Rows }}
           <tr>
             <td>{{ add $i 1 }}</td>
-            <td><select name="ipg_group_{{ $i }}" aria-label="Group">
-              <option value="">—</option>
-              {{ range $.IPGroupNames }}<option value="{{ . }}" {{ if eq . $row.Group }}selected{{ end }}>{{ . }}</option>{{ end }}
-              {{ if and $row.Group (not (contains $.IPGroupNames $row.Group)) }}<option value="{{ $row.Group }}" selected>{{ $row.Group }} (missing)</option>{{ end }}
+            <td><select name="ipg_group_{{ $i }}" multiple size="3" aria-label="Groups">
+              {{ range $.IPGroupNames }}<option value="{{ . }}" {{ if contains $row.Groups . }}selected{{ end }}>{{ . }}</option>{{ end }}
+              {{ range $row.Groups }}{{ if not (contains $.IPGroupNames .) }}<option value="{{ . }}" selected>{{ . }} (missing)</option>{{ end }}{{ end }}
             </select></td>
             <td><select name="ipg_match_{{ $i }}" aria-label="Clients">
-              <option value="inside" {{ if ne $row.Match "outside" }}selected{{ end }}>inside</option>
-              <option value="outside" {{ if eq $row.Match "outside" }}selected{{ end }}>outside</option>
+              <option value="inside" {{ if ne $row.Match "outside" }}selected{{ end }}>inside any</option>
+              <option value="outside" {{ if eq $row.Match "outside" }}selected{{ end }}>outside all</option>
             </select></td>
             <td><select name="ipg_action_{{ $i }}" aria-label="Action">
-              {{ range (strings "block" "trial" "engine" "tune") }}<option value="{{ . }}" {{ if eq . $row.Action }}selected{{ end }}>{{ . }}</option>{{ end }}
+              {{ range (strings "block" "ban" "trial" "engine" "tune") }}<option value="{{ . }}" {{ if eq . $row.Action }}selected{{ end }}>{{ . }}</option>{{ end }}
             </select></td>
             <td><select name="ipg_engine_{{ $i }}" aria-label="Engine">
               <option value="">—</option>
@@ -115,7 +116,7 @@
             <td><input type="number" name="ipg_in_{{ $i }}" min="1" max="10000" value="{{ $row.Inbound }}" aria-label="Inbound threshold"></td>
             <td><input type="number" name="ipg_out_{{ $i }}" min="1" max="10000" value="{{ $row.Outbound }}" aria-label="Outbound threshold"></td>
             <td><input type="text" name="ipg_note_{{ $i }}" maxlength="200" value="{{ $row.Note }}" aria-label="Note"></td>
-            <td>{{ if $row.Group }}<input type="checkbox" name="ipg_remove_{{ $i }}" aria-label="Remove rule {{ add $i 1 }}">{{ end }}</td>
+            <td>{{ if $row.Groups }}<input type="checkbox" name="ipg_remove_{{ $i }}" aria-label="Remove rule {{ add $i 1 }}">{{ end }}</td>
           </tr>
         {{ end }}
       </tbody>

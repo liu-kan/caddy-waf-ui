@@ -2,6 +2,7 @@ package ui
 
 import (
 	"encoding/json"
+	"html"
 	"net/http"
 	"net/url"
 	"os"
@@ -68,7 +69,7 @@ func TestIPGroupsPageManagesGroups(t *testing.T) {
 
 	seedManagedSite(t)
 	p := waf.DefaultPolicy()
-	p.IPGroups = []waf.IPGroupRule{{Group: "office", Action: waf.GroupEngine, Engine: "DetectionOnly"}}
+	p.IPGroups = []waf.IPGroupRule{{Groups: []string{"office"}, Action: waf.GroupEngine, Engine: "DetectionOnly"}}
 	if err := service.ApplyPolicy(service.Actor{}, "example.com", p); err != nil {
 		t.Fatal(err)
 	}
@@ -125,6 +126,52 @@ func TestPolicyFormEditsIPGroupRules(t *testing.T) {
 	}
 }
 
+func TestPolicyFormBansClientsOutsideSeveralGroups(t *testing.T) {
+	setupUIEnv(t)
+	sources := setupIPGroups(t)
+	writeGroupSource(t, sources, "cn.txt", "203.0.113.0/25\n")
+	writeGroupSource(t, sources, "jp.txt", "203.0.113.128/25\n")
+	for _, name := range []string{"cn", "jp"} {
+		if _, err := service.PutIPGroup(t.Context(), service.Actor{}, ipgroups.Definition{Name: name, Source: ipgroups.SourceFile, File: name + ".txt"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seedManagedSite(t)
+	mux := NewPagesMux()
+	form := url.Values{"blocking_pl": {"1"}, "detection_pl": {"1"}, "inbound_threshold": {"5"}, "outbound_threshold": {"4"},
+		"ipg_count": {"1"}, "ipg_group_0": {"jp", "cn"}, "ipg_match_0": {"outside"}, "ipg_action_0": {"ban"},
+		"action": {"preview"}, "reason": {"allow cn and jp only"}}
+	rec := formPost(t, mux, "/sites/example.com/policy", form)
+	body := html.UnescapeString(rec.Body.String())
+	union := regexp.MustCompile(`!@ipMatchFromFile /etc/caddy/ui-managed/ipgroups/(_union\.[0-9a-f]{12}\.txt)`).FindStringSubmatch(body)
+	// The site runs DetectionOnly: the ban records what it would deny.
+	if rec.Code != http.StatusOK || union == nil || !strings.Contains(body, "auditlog,setvar:tx.blocking_inbound_anomaly_score=0,setvar:tx.blocking_outbound_anomaly_score=0,setvar:tx.detection_inbound_anomaly_score=0,setvar:tx.detection_outbound_anomaly_score=0,tag:'caddy-waf-ui/ipgroup',msg:'IP group policy: outside cn+jp banned'") {
+		t.Fatalf("preview must match the merged list of both groups: %d", rec.Code)
+	}
+	// The merged list holds both groups and was written for Caddy.
+	merged, err := os.ReadFile(filepath.Join(os.Getenv("CADDY_UI_MANAGED_DIR"), "ipgroups", union[1]))
+	if err != nil || !strings.Contains(string(merged), "\n203.0.113.0/24\n") {
+		t.Fatalf("merged list: %q %v", merged, err)
+	}
+	form.Set("draft_id", regexpFind(t, body, `name="draft_id" value="([^"]+)"`))
+	form.Set("action", "apply")
+	if rec := formPost(t, mux, "/sites/example.com/policy", form); rec.Code != http.StatusSeeOther {
+		t.Fatalf("apply: %d", rec.Code)
+	}
+	state, err := service.ReadSiteState("example.com")
+	if err != nil || len(state.Policy.IPGroups) != 1 || strings.Join(state.Policy.IPGroups[0].Groups, ",") != "cn,jp" || state.Policy.IPGroups[0].Action != waf.GroupBan {
+		t.Fatalf("stored rules: %+v %v", state.Policy.IPGroups, err)
+	}
+	page := getPage(t, "/?tab=policy&domain=example.com")
+	if !strings.Contains(page, `<option value="cn" selected`) || !strings.Contains(page, `<option value="jp" selected`) {
+		t.Fatal("the policy page must select both groups of the stored rule")
+	}
+	usage, stale, err := service.IPGroupPublication()
+	if err != nil || len(usage["cn"]) != 1 || len(usage["jp"]) != 1 || len(stale) != 0 {
+		t.Fatalf("both groups are used and published: %v %v %v", usage, stale, err)
+	}
+}
+
 func TestEventDetailShowsClientGroups(t *testing.T) {
 	setupUIEnv(t)
 	sources := setupIPGroups(t)
@@ -174,7 +221,7 @@ func TestIPGroupAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := waf.DefaultPolicy()
-	p.IPGroups = []waf.IPGroupRule{{Group: "office", Action: waf.GroupBlock}}
+	p.IPGroups = []waf.IPGroupRule{{Groups: []string{"office"}, Action: waf.GroupBlock}}
 	if err := service.ApplyPolicy(service.Actor{}, "example.com", p); err != nil {
 		t.Fatal(err)
 	}

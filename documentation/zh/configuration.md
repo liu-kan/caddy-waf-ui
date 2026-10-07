@@ -67,7 +67,7 @@ UI 只通过环境变量配置。Compose 部署时写在 `.env`（权限 0600，
 | 变量 | 说明 | 默认值 |
 | --- | --- | --- |
 | `CADDY_UI_IPGROUP_DIR` | 文件来源所在目录（UI 容器内），只读挂载 | `/ipgroups` |
-| `CADDY_UI_IPGROUP_MAX_PREFIXES` | 单个群组名单的最大前缀数 | `100000` |
+| `CADDY_UI_IPGROUP_MAX_PREFIXES` | 单个群组名单的最大前缀数。标准镜像中匹配耗时与前缀数成正比；带 coraza-ipset 插件的镜像中与前缀数无关，上限取决于内存和加载时间。调高前先看 [性能与名单规模](ip-groups.md#性能与名单规模) | `100000` |
 | `CADDY_UI_IPGROUP_PROXY` | 只用于群组下载的 HTTP(S) 代理，例如 `http://10.0.0.2:7890`；为空时使用 `HTTPS_PROXY`/`NO_PROXY` | 空 |
 | `CADDY_UI_IPGROUP_PATH` | （仅 Compose）挂载到 `/ipgroups` 的宿主机目录 | `./ipgroups` |
 

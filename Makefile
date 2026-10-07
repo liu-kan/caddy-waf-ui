@@ -7,6 +7,10 @@ include tools/versions.mk
 
 TOOLS := tools/bin
 UV := uv run
+# golangci-lint type-checks with the Go release it was built for, so lint
+# runs on the go.mod toolchain even when a newer Go is installed (Go fetches
+# it on first use, as in CI).
+GO_TOOLCHAIN := $(shell sed -n 's/^toolchain //p' go.mod)
 
 .DEFAULT_GOAL := help
 
@@ -52,7 +56,7 @@ help:
 	@echo "  make build            Compile all packages"
 	@echo "  make docker-build     Build the Docker image"
 	@echo "  make compose-config   Validate the docker-compose configuration"
-	@echo "  make crs-version      Print the Caddy, Coraza and CRS versions compiled into CADDY_IMAGE"
+	@echo "  make crs-version      Print the Caddy, Coraza, CRS and coraza-ipset versions compiled into CADDY_IMAGE"
 	@echo "  make crs-dict         Regenerate the embedded rule dictionary (CRS_VERSION=...)"
 	@echo "  make clean            Remove test and build artifacts"
 	@echo ""
@@ -117,7 +121,7 @@ vet:                                     # Run go vet static analysis
 .PHONY: lint-go
 lint-go:                                 # Run golangci-lint on all Go packages
 	@echo "==> Go"
-	@$(TOOLS)/golangci-lint run ./...
+	@GOTOOLCHAIN=$(GO_TOOLCHAIN) $(TOOLS)/golangci-lint run ./...
 	@echo "✓ Go lint passed."
 
 .PHONY: lint-yaml
@@ -222,8 +226,8 @@ docker-build:                            # Build the local Docker image
 CRS_VERSION ?= 4.25.0
 
 .PHONY: crs-version
-crs-version:                             # Print the Caddy, Coraza and coraza-coreruleset versions inside CADDY_IMAGE
-	@docker run --rm --entrypoint /usr/local/bin/caddy $${CADDY_IMAGE:-liukan/caddy-with-auth:latest} build-info | grep -E 'caddyserver/caddy/v2[[:space:]]|coraza-coreruleset|coraza/v3|coraza-caddy'
+crs-version:                             # Print the Caddy, Coraza, coraza-coreruleset and coraza-ipset versions inside CADDY_IMAGE
+	@docker run --rm --entrypoint /usr/local/bin/caddy $${CADDY_IMAGE:-liukan/caddy-with-auth:latest} build-info | grep -E 'caddyserver/caddy/v2[[:space:]]|coraza-coreruleset|coraza/v3|coraza-caddy|coraza-ipset'
 
 .PHONY: crs-dict
 crs-dict:                                # Regenerate internal/crs/data/crs-dictionary.json.gz for CRS_VERSION

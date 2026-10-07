@@ -28,8 +28,9 @@ type Options struct {
 	// the GenerateSnippetWithOptions compatibility entry point.
 	VerifyProbe bool
 	Exclusions  string
-	// IPGroupFiles maps IP group names to the list files Caddy reads.
-	IPGroupFiles map[string]string
+	// IPGroupList resolves the IP groups of a rule to the list file Caddy
+	// reads: a group list, or a merged list of several groups.
+	IPGroupList func(groups []string) (string, error)
 }
 
 func DefaultOptions() Options {
@@ -67,8 +68,8 @@ type Generated struct {
 //  2. UI policy (SecAction setvar) so it overrides crs-setup/before values.
 //  3. Runtime (path-scoped) exclusions: ctl actions must run before the CRS
 //     rules they disable.
-//  4. IP group rules (phase 1, in list order): block, trial, engine or
-//     threshold changes for clients inside or outside an IP group.
+//  4. IP group rules (phase 1, in list order): block, ban, trial, engine or
+//     threshold changes for clients inside or outside IP groups.
 //  5. CRS rules, the operator's after-file, then configure-time exclusions
 //     (SecRuleRemove*/SecRuleUpdateTarget*) which need the rules loaded.
 //  6. Disabled rule groups and the tuning-mode audit rule.
@@ -86,7 +87,7 @@ coraza_waf {
 {{ end }}    directives ` + "`" + `
         # waf-config-revision: {{ .Revision }}
         SecComponentSignature "{{ .Signature }}"
-{{ if and .Options.VerifyProbe (ne .Mode "Off") }}        SecRule REQUEST_HEADERS:X-Caddy-WAF-Probe "@streq {{ .Revision }}" "id:9001200,phase:1,{{ if eq .Mode "On" }}deny,status:418{{ else }}pass{{ end }},t:none,log,auditlog,msg:'WAF UI origin probe',ctl:auditEngine=On"
+{{ if and .Options.VerifyProbe (ne .Mode "Off") }}        SecRule REQUEST_HEADERS:X-Caddy-WAF-Probe "@streq {{ .Revision }}" "id:9001200,phase:1,{{ if eq .Mode "On" }}deny,status:418,{{ .ZeroScores }}{{ else }}pass{{ end }},t:none,log,auditlog,msg:'WAF UI origin probe',ctl:auditEngine=On"
 {{ end }}
         Include {{ .Options.CorazaConfig }}
         Include {{ .Options.CRSSetup }}
@@ -135,6 +136,8 @@ type templateData struct {
 	IPGroups      []string
 	Runtime       []string
 	Configuration []string
+	// ZeroScores starts the CRS scores of the denied On-mode probe.
+	ZeroScores string
 }
 
 // GenerateSnippet retains the original API: default baseline and policy, no
@@ -188,7 +191,7 @@ func Generate(site string, cfg Config, auditPath string, opts Options) (Generate
 	sig := Signature{Site: site, Revision: revision, Mode: string(cfg.Mode), BlockingPL: policy.BlockingPL,
 		DetectionPL: policy.DetectionPL, Inbound: policy.InboundThreshold, Outbound: policy.OutboundThreshold, Tuning: policy.Tuning, EarlyBlocking: policy.EarlyBlocking}
 	pre, post := policy.render()
-	groups, err := policy.renderGroups(opts.IPGroupFiles)
+	groups, err := policy.renderGroups(opts.IPGroupList, cfg.Mode)
 	if err != nil {
 		return Generated{}, err
 	}
@@ -197,7 +200,7 @@ func Generate(site string, cfg Config, auditPath string, opts Options) (Generate
 		PolicyLine: policyLine,
 		Mode:       cfg.Mode, AuditPath: auditPath, Options: opts, Revision: revision,
 		Signature: sig.String(), PolicyPre: pre, PolicyPost: post, IPGroups: groups,
-		Runtime: runtime, Configuration: configuration,
+		Runtime: runtime, Configuration: configuration, ZeroScores: zeroScores,
 	}
 	var buf bytes.Buffer
 	if err := wafTmpl.Execute(&buf, data); err != nil {

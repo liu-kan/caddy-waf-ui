@@ -60,16 +60,17 @@ Coraza 的 `RelevantOnly` 只记录响应为 4xx/5xx 的请求：被拦截或将
 
 ## IP 群组规则
 
-**IP group rules** 为某个 [IP 群组](ip-groups.md) 内（inside）或群组外（outside）的客户端设置独立策略，按顺序在 CRS 之前执行：
+**IP group rules** 为属于所选 [IP 群组](ip-groups.md) 之一（inside any）或一个都不属于（outside all）的客户端设置独立策略，按顺序在 CRS 之前执行。一条规则可选多个群组，例如 `cn`、`jp` · outside all · ban 只允许这两个国家访问：
 
 | 动作 | 效果 |
 | --- | --- |
-| block | 返回 403 |
-| trial | 只记录本会拦截的请求，不拦截。上线 block 前先用它观察真实流量 |
+| block | 返回 403，记录为事件 |
+| ban | 返回 403，不记录事件，用于流量大的白名单 |
+| trial | 只记录本会拦截的请求，不拦截。上线 block 或 ban 前先用它观察真实流量 |
 | engine | 切换规则引擎：On、DetectionOnly 或 Off |
 | tune | 改 blocking/detection PL、入站/出站阈值；留空的项沿用上面的站点策略 |
 
-表格末尾留有空行用于新增；勾选 **Remove** 删除一条。群组规则随站点策略一起预览、估算影响、应用和回滚，规则的语义、执行顺序与示例见 [IP 群组](ip-groups.md#群组规则)。
+表格末尾留有空行用于新增；群组列可多选（按住 Ctrl，macOS 为 ⌘）；勾选 **Remove** 删除一条。群组规则随站点策略一起预览、估算影响、应用和回滚，规则的语义、执行顺序与示例见 [IP 群组](ip-groups.md#群组规则)。
 
 ## 预览与应用
 

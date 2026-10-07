@@ -38,7 +38,7 @@ LABEL org.opencontainers.image.licenses="MIT"
 #
 # Pin versions currently available in Alpine v3.23/main. OpenSSL 3.5.9
 # supersedes the removed 3.5.8 package pin; refresh pins with repository updates.
-RUN apk --no-cache add ca-certificates=20260909-r0 openssl=3.5.9-r0 tzdata=2026d-r0 \
+RUN apk --no-cache add ca-certificates=20260909-r0 openssl=3.5.9-r0 tzdata=2026e-r0 \
     && addgroup -g 65532 -S uiuser \
     && adduser -u 65532 -S -D -G uiuser -g '' uiuser \
     && mkdir -p /ui-managed /backups /ui-data /data/logs /config /run/caddy-admin \

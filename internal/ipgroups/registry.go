@@ -123,7 +123,22 @@ type Registry struct {
 	mu      sync.Mutex
 	groups  map[string]*Group
 	sets    map[string]*Set
+	// unions caches merged lists by the active versions they combine.
+	unions map[string]mergedList
 }
+
+// mergedList is the file name and content of a merged list.
+type mergedList struct {
+	file    string
+	content []byte
+}
+
+// unionFile prefixes merged list files. Group names start with a letter or
+// digit, so a merged list never takes the file name of a group list.
+const unionFile = "_union"
+
+// maxUnions bounds the merged lists kept in memory.
+const maxUnions = 16
 
 // Open loads the registry and the active list of every group.
 func Open(opts Options) (*Registry, error) {
@@ -134,7 +149,7 @@ func Open(opts Options) (*Registry, error) {
 	if err != nil {
 		return nil, err
 	}
-	r := &Registry{opts: opts, client: client, groups: map[string]*Group{}, sets: map[string]*Set{}}
+	r := &Registry{opts: opts, client: client, groups: map[string]*Group{}, sets: map[string]*Set{}, unions: map[string]mergedList{}}
 	data, err := os.ReadFile(r.statePath())
 	if errors.Is(err, os.ErrNotExist) {
 		return r, nil
@@ -372,7 +387,7 @@ func (r *Registry) Refresh(ctx context.Context, name string, force bool) (bool, 
 		return false, errors.Join(err, r.saveLocked())
 	}
 	g.Stamp, g.ETag, g.Modified, g.Error = src.stamp, src.etag, src.modified, ""
-	v, content := newVersion(name, parsed)
+	v, content := newVersion(name, name, parsed)
 	v.Imported = g.Checked
 	switch {
 	case g.Active != nil && v.SHA256 == g.Active.SHA256 && r.sets[name] != nil:
@@ -479,6 +494,75 @@ func (r *Registry) Digest() string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
+// ListPath returns the list file that Caddy reads for a rule over the
+// groups in names: the active list of a single group, or the merged list of
+// several. It writes nothing; EnsureList also writes a merged list.
+func (r *Registry) ListPath(names []string) (string, error) {
+	file, _, err := r.list(names)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(r.opts.CaddyDir, "/") + "/" + file, nil
+}
+
+// EnsureList returns ListPath(names) after writing a merged list that does
+// not exist yet.
+func (r *Registry) EnsureList(names []string) (string, error) {
+	file, content, err := r.list(names)
+	if err != nil {
+		return "", err
+	}
+	if content != nil {
+		_, err := os.Stat(filepath.Join(r.opts.ListDir, file))
+		if errors.Is(err, os.ErrNotExist) {
+			err = r.writeList(Version{File: file}, content)
+		}
+		if err != nil {
+			return "", err
+		}
+	}
+	return strings.TrimSuffix(r.opts.CaddyDir, "/") + "/" + file, nil
+}
+
+// list resolves names to a list file name, with the content of a merged
+// list (nil for a single group).
+func (r *Registry) list(names []string) (string, []byte, error) {
+	if len(names) == 0 {
+		return "", nil, errors.New("no IP group given")
+	}
+	r.mu.Lock()
+	sets := make([]*Set, 0, len(names))
+	var key strings.Builder
+	for _, name := range names {
+		g, ok := r.groups[name]
+		if !ok || g.Active == nil || r.sets[name] == nil {
+			r.mu.Unlock()
+			return "", nil, fmt.Errorf("IP group %q has no active list: import it before using it in a policy", name)
+		}
+		sets = append(sets, r.sets[name])
+		key.WriteString(name + "=" + g.Active.SHA256 + "\n")
+	}
+	if len(names) == 1 {
+		file := r.groups[names[0]].Active.File
+		r.mu.Unlock()
+		return file, nil, nil
+	}
+	cached, ok := r.unions[key.String()]
+	r.mu.Unlock()
+	if ok {
+		return cached.file, cached.content, nil
+	}
+	// Sets are immutable: merge them without holding the lock.
+	v, content := newVersion(unionFile, strings.Join(names, "+"), Parsed{Set: Union(sets...)})
+	r.mu.Lock()
+	if len(r.unions) >= maxUnions {
+		clear(r.unions)
+	}
+	r.unions[key.String()] = mergedList{file: v.File, content: content}
+	r.mu.Unlock()
+	return v.File, content, nil
+}
+
 // Contains reports whether the active list of a group holds addr.
 func (r *Registry) Contains(name string, addr netip.Addr) bool {
 	r.mu.Lock()
@@ -559,7 +643,7 @@ func (r *Registry) saveLocked() error {
 }
 
 // newVersion renders the canonical list of a parsed source.
-func newVersion(name string, p Parsed) (Version, []byte) {
+func newVersion(file, label string, p Parsed) (Version, []byte) {
 	var body strings.Builder
 	v := Version{Format: p.Format, Skipped: p.Skipped}
 	for _, prefix := range p.Set.Prefixes() {
@@ -574,9 +658,9 @@ func newVersion(name string, p Parsed) (Version, []byte) {
 	}
 	sum := sha256.Sum256([]byte(body.String()))
 	v.SHA256 = hex.EncodeToString(sum[:])
-	v.File = name + "." + v.SHA256[:12] + ".txt"
+	v.File = file + "." + v.SHA256[:12] + ".txt"
 	header := fmt.Sprintf("# caddy-waf-ui IP group %s: %d prefixes (%d IPv4, %d IPv6), sha256 %s\n",
-		name, v.Prefixes, v.IPv4, v.IPv6, v.SHA256)
+		label, v.Prefixes, v.IPv4, v.IPv6, v.SHA256)
 	return v, []byte(header + body.String())
 }
 
