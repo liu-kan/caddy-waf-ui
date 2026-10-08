@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/developmi/caddy-waf-ui/internal/domain"
+	"github.com/developmi/caddy-waf-ui/internal/service"
 	"github.com/developmi/caddy-waf-ui/internal/waf"
 )
 
@@ -531,5 +533,27 @@ func TestAPIHealthReturnsOK(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"status":"ok"`) {
 		t.Errorf("the body of /health is not the expected one: %s", rec.Body.String())
+	}
+}
+
+// TestAPIConflictsReturn409: a concurrent change or a slug collision is a
+// conflict, not a server failure.
+func TestAPIConflictsReturn409(t *testing.T) {
+	setupUIEnv(t)
+	if err := service.ApplyMode(service.Actor{}, "a.b.example.com", domain.ModeOn); err != nil {
+		t.Fatal(err)
+	}
+	mux := NewRouter()
+	for _, tc := range []struct{ method, path, body string }{
+		{http.MethodPut, "/api/sites/a-b.example.com/mode", `{"mode":"Off"}`},
+		{http.MethodPut, "/api/sites/a-b.example.com/exclusions", `{"exclusions":[]}`},
+		{http.MethodPut, "/api/sites/a-b.example.com/iprules", `{"allowlist":[],"denylist":[]}`},
+		{http.MethodPut, "/api/sites/a-b.example.com/policy", `{"policy":{}}`},
+	} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body)))
+		if rec.Code != http.StatusConflict {
+			t.Errorf("%s %s: expected 409, got %d %s", tc.method, tc.path, rec.Code, rec.Body.String())
+		}
 	}
 }

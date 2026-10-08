@@ -47,6 +47,12 @@ const (
 
 const maxDiffBytes = 16 << 10
 
+// maxJournalBytes bounds the active journal file. Past it the file becomes
+// changes.jsonl.1, replacing the previous generation, so the history keeps
+// between one and two files' worth of entries (Alloy only tails
+// changes.jsonl). It is a variable so tests can shrink it.
+var maxJournalBytes int64 = 8 << 20
+
 var mu sync.Mutex
 
 // Path returns the journal file path inside the data directory.
@@ -86,7 +92,17 @@ func Append(e Entry) error {
 		_ = f.Close()
 		return err
 	}
-	return f.Close()
+	info, err := f.Stat()
+	if cerr := f.Close(); cerr != nil {
+		return cerr
+	}
+	if err != nil {
+		return err
+	}
+	if info.Size() >= maxJournalBytes {
+		return os.Rename(path, path+".1")
+	}
+	return nil
 }
 
 // Filter narrows List.
@@ -95,11 +111,29 @@ type Filter struct {
 	Limit int
 }
 
-// List returns entries newest first. A missing journal is empty.
+// List returns entries newest first, from the active journal and its
+// previous generation. A missing journal is empty.
 func List(f Filter) ([]Entry, error) {
 	mu.Lock()
 	defer mu.Unlock()
-	file, err := os.Open(Path())
+	var entries []Entry
+	for _, path := range []string{Path() + ".1", Path()} {
+		list, err := decodeFile(path, f.Site)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, list...)
+	}
+	sort.SliceStable(entries, func(i, j int) bool { return entries[i].TS.After(entries[j].TS) })
+	if f.Limit > 0 && len(entries) > f.Limit {
+		entries = entries[:f.Limit]
+	}
+	return entries, nil
+}
+
+// decodeFile reads the entries of one journal file (missing = none).
+func decodeFile(path, site string) ([]Entry, error) {
+	file, err := os.Open(path) //nolint:gosec // G304: journal path inside the operator-configured data directory.
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
@@ -107,15 +141,7 @@ func List(f Filter) ([]Entry, error) {
 		return nil, err
 	}
 	defer func() { _ = file.Close() }()
-	entries, err := decode(file, f.Site)
-	if err != nil {
-		return nil, err
-	}
-	sort.SliceStable(entries, func(i, j int) bool { return entries[i].TS.After(entries[j].TS) })
-	if f.Limit > 0 && len(entries) > f.Limit {
-		entries = entries[:f.Limit]
-	}
-	return entries, nil
+	return decode(file, site)
 }
 
 func decode(r io.Reader, site string) ([]Entry, error) {

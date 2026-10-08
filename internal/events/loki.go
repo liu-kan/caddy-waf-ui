@@ -146,18 +146,22 @@ func Backfill(ctx context.Context, c *LokiClient, store *Store, from, to time.Ti
 			return err
 		}
 		res.Fetched += len(entries)
+		list := make([]*Event, 0, len(entries))
 		for _, entry := range entries {
 			e, err := DecodeEventLine(entry.Line, entry.TS)
 			if err != nil {
 				return err
 			}
-			added, err := store.Append(e, SourceLoki)
-			if err != nil {
-				return err
-			}
-			if added {
+			list = append(list, e)
+		}
+		added, err := store.AppendBatch(list, SourceLoki)
+		for _, ok := range added {
+			if ok {
 				res.Imported++
 			}
+		}
+		if err != nil {
+			return err
 		}
 		if len(entries) < maxLokiLimit {
 			return nil

@@ -3,6 +3,7 @@ package waf_test
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/developmi/caddy-waf-ui/internal/domain"
 	"github.com/developmi/caddy-waf-ui/internal/waf"
@@ -61,9 +62,25 @@ func TestGenerateExclusions(t *testing.T) {
 				{Type: waf.ExcludeByID, Value: "942100", Path: "/api/import", PathMatch: waf.PathExact},
 			},
 			wantErr: false,
+			// The raw AND the normalized path must match: a dot-segment
+			// path such as /search/../admin never inherits the exclusion,
+			// whatever the backend's own normalization.
 			fragments: []string{
-				`SecRule REQUEST_FILENAME "@beginsWith /search" "id:9000001,phase:1,pass,t:none,nolog,ctl:ruleRemoveTargetById=941100;ARGS:q"`,
-				`SecRule REQUEST_FILENAME "@streq /api/import" "id:9000002,phase:1,pass,t:none,nolog,ctl:ruleRemoveById=942100"`,
+				"SecRule REQUEST_FILENAME \"@beginsWith /search\" \"id:9000001,phase:1,pass,t:none,nolog,chain\"\n" +
+					"SecRule REQUEST_FILENAME \"@beginsWith /search\" \"t:none,t:normalizePathWin,ctl:ruleRemoveTargetById=941100;ARGS:q\"",
+				"SecRule REQUEST_FILENAME \"@streq /api/import\" \"id:9000002,phase:1,pass,t:none,nolog,chain\"\n" +
+					"SecRule REQUEST_FILENAME \"@streq /api/import\" \"t:none,t:normalizePathWin,ctl:ruleRemoveById=942100\"",
+			},
+		},
+		{
+			name: "expiring path-scoped exclusion chains the expiry and both path checks",
+			exclusions: []waf.Exclusion{
+				{Type: waf.ExcludeByID, Value: "941100", Path: "/search", Expires: time.Unix(2000000000, 0)},
+			},
+			fragments: []string{
+				"SecRule TIME_EPOCH \"@lt 2000000000\" \"id:9000001,phase:1,pass,t:none,nolog,chain\"\n" +
+					"SecRule REQUEST_FILENAME \"@beginsWith /search\" \"t:none,chain\"\n" +
+					"SecRule REQUEST_FILENAME \"@beginsWith /search\" \"t:none,t:normalizePathWin,ctl:ruleRemoveById=941100\"",
 			},
 		},
 		{

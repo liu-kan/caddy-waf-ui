@@ -69,3 +69,14 @@
 ## IP 群组（2026-10-06）
 
 Compose 新增只读挂载 `${CADDY_UI_IPGROUP_PATH:-./ipgroups}:/ipgroups`。合并到已有部署时，为 UI 加上这个挂载（或设置 `CADDY_UI_IPGROUP_DIR`），需要通过代理下载时设置 `CADDY_UI_IPGROUP_PROXY`。名单文件写在受管 overlay 卷的 `ipgroups/` 子目录，Caddy 通过已有的只读挂载读取，不需要新卷。
+
+## 安全与可靠性修复（2026-10-07）
+
+升级时需要处理：
+
+1. **令牌强度**：`CADDY_UI_TOKEN` 少于 32 个字符或仍是 `.env.example` 中的占位值时，UI 拒绝启动（用 `openssl rand -hex 32` 生成）。设置了 `CADDY_UI_METRICS_TOKEN` 时同样要求，且必须与 `CADDY_UI_TOKEN` 不同；修改后同步更新 Alloy。
+2. **重新登录**：会话 Cookie 改为签名格式，服务端在 12 小时后判定过期；旧版本签发的 Cookie 会失效一次。
+3. **排除项路径**：带路径的排除项现在要求请求路径归一化后仍在范围内才生效。已有 overlay 在下一次修改时切换到新规则；想立即生效，对每个有带路径排除项的站点保存一次任意修改（例如重新应用当前模式）。
+4. **域名文件名冲突**：仅 `.` 与 `-` 不同的域名（`a-b.example.com`、`a.b.example.com`）对应同一组文件。对后一个域名的修改会被拒绝（API 返回 409）；其中一个需在 UI 之外管理或改名。
+
+无需处理的行为变化：变更日志超过 8 MiB 时轮转为 `changes.jsonl.1`（Alloy 仍读取 `changes.jsonl`）；审计轮转和 IP 群组刷新不再产生快照；分析类页面最多滞后 15 秒；Makefile 用 Dockerfile 构建镜像的 Go 版本运行测试和 `govulncheck`（离线时用 `TEST_TOOLCHAIN=local`）。

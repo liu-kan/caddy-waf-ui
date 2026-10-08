@@ -8,7 +8,7 @@
 
 ## Commands
 - **Run**: `go run ./cmd/server` or `docker compose up`
-- **Test**: `make test` (`go test ./...`)
+- **Test**: `make test` (`go test ./...`); vet/tests/govulncheck/build run on the Dockerfile builder Go (`TEST_TOOLCHAIN=local` to override offline)
 - **Test Race**: `make test-race` (`go test -race ./...`)
 - **Integration**: `go test ./tests/integration/...`
 - **Lint**: `make lint` (`lint-go`, `lint-yaml`, `lint-actions`, `lint-docker`, `lint-security`)
@@ -30,7 +30,7 @@
 - **License**: MIT - open source
 - **Maintainer**: Miguel Lozano / Developmi
 - **Architecture**: Sidecar writes configuration overlays (`coraza_waf`, IP rules) to `/ui-managed` and triggers reloads via Caddy Admin API (`:2019/load`)
-- **Container Hardening**: Non-root user `uiuser` (UID 65532), read-only rootfs, drop capabilities ALL, no-new-privileges, pinned packages in Dockerfile (`openssl=3.5.9-r0`)
+- **Container Hardening**: Non-root user `uiuser` (UID 65532), read-only rootfs, drop capabilities ALL, no-new-privileges, pinned packages in Dockerfile (`libcrypto3`/`libssl3=3.5.9-r0`, no openssl CLI)
 - **App Security**: Constant-time password comparison (`subtle.ConstantTimeCompare`), session token generation (`crypto/rand`), login/API sliding rate limiting, CSRF tokens, strict path sanitization against directory traversal
 
 ## CI/CD

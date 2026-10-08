@@ -31,14 +31,16 @@ LABEL org.opencontainers.image.description="Sidecar management UI for Caddy with
 LABEL org.opencontainers.image.source="https://github.com/liu-kan/caddy-waf-ui"
 LABEL org.opencontainers.image.licenses="MIT"
 
-# Install root certificates and timezone data (useful for logs and Cloudflare API calls),
+# Install root certificates (IP group downloads, Loki) and timezone data,
 # create the UI non-root user and the managed directories with user ownership:
 # named volumes inherit the directory ownership on first mount, avoiding permission
 # errors (EACCES) in ui-managed/ and backups/. Pinned package versions (DL3018).
 #
-# Pin versions currently available in Alpine v3.23/main. OpenSSL 3.5.9
-# supersedes the removed 3.5.8 package pin; refresh pins with repository updates.
-RUN apk --no-cache add ca-certificates=20260909-r0 openssl=3.5.9-r0 tzdata=2026e-r0 \
+# Pin versions currently available in Alpine v3.23/main. The OpenSSL 3.5.9
+# libraries (CVE-2026-14456 fix, superseding the 3.5.8 pin) upgrade the ones
+# of the base image; the openssl CLI is not installed (the UI is a static Go
+# binary). Refresh pins with repository updates.
+RUN apk --no-cache add ca-certificates=20260909-r0 libcrypto3=3.5.9-r0 libssl3=3.5.9-r0 tzdata=2026e-r0 \
     && addgroup -g 65532 -S uiuser \
     && adduser -u 65532 -S -D -G uiuser -g '' uiuser \
     && mkdir -p /ui-managed /backups /ui-data /data/logs /config /run/caddy-admin \

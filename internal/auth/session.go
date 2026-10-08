@@ -7,26 +7,79 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/developmi/caddy-waf-ui/internal/config"
+	"github.com/developmi/caddy-waf-ui/internal/ratelimit"
 )
 
-// sessionCookieName is the name of the session cookie (decision D3):
-// the cookie IS the access token, with no server-side state. The same secret
-// protects pages and API.
+// sessionCookieName is the name of the session cookie (decision D3). The
+// cookie is a signed, expiring session derived from the access token, with no
+// server-side state: it never carries the token itself, so a stolen cookie
+// is not an API credential and stops working after sessionMaxAgeSeconds.
 const sessionCookieName = "CADDY_UI_TOKEN"
+
+// sessionVersion prefixes the session cookie format
+// "v1.<issued unix seconds>.<hex HMAC-SHA256(token, "session|v1|<issued>")>".
+const sessionVersion = "v1"
+
+// sessionClockSkew tolerates sessions issued slightly in the future.
+const sessionClockSkew = time.Minute
 
 // csrfContext is the fixed HMAC context used to derive the CSRF token from
 // the secret: the raw secret never travels in the DOM (decision D1).
 const csrfContext = "csrf"
 
-// sessionMaxAgeSeconds is the session cookie lifetime: 12h (SC-1).
-// With daily token rotation, a captured cookie stays valid until that
-// post-rotation window — an accepted tradeoff of the stateless design
-// (no server-side expiration).
+// sessionMaxAgeSeconds is the session lifetime: 12h (SC-1), enforced both
+// by the cookie Max-Age and by the server from the signed issue time.
+// Rotating CADDY_UI_TOKEN invalidates every session at once.
 const sessionMaxAgeSeconds = 43200
+
+// NewSessionValue returns a session cookie value issued at now.
+func NewSessionValue(now time.Time) (string, error) {
+	secret := tokenFromEnv()
+	if secret == "" {
+		return "", errors.New("CADDY_UI_TOKEN not configured: cannot sign a session")
+	}
+	issued := strconv.FormatInt(now.Unix(), 10)
+	return sessionVersion + "." + issued + "." + sessionMAC(secret, issued), nil
+}
+
+// sessionMAC signs an issue time. Its context differs from the CSRF value,
+// so the CSRF token in the DOM can never be replayed as a session.
+func sessionMAC(secret, issued string) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte("session|" + sessionVersion + "|" + issued))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// validSession verifies the signature (constant time) and the age of a
+// session cookie value at now.
+func validSession(value string, now time.Time) bool {
+	secret := tokenFromEnv()
+	if secret == "" {
+		return false
+	}
+	version, rest, ok := strings.Cut(value, ".")
+	if !ok || version != sessionVersion {
+		return false
+	}
+	issued, signature, ok := strings.Cut(rest, ".")
+	if !ok {
+		return false
+	}
+	unix, err := strconv.ParseInt(issued, 10, 64)
+	if err != nil {
+		return false
+	}
+	age := now.Sub(time.Unix(unix, 0))
+	if age < -sessionClockSkew || age > sessionMaxAgeSeconds*time.Second {
+		return false
+	}
+	return hmac.Equal([]byte(signature), []byte(sessionMAC(secret, issued)))
+}
 
 // tokenFromEnv returns the configured token (empty if unset).
 // Centralized in config (finding J5-3).
@@ -54,23 +107,60 @@ func bearerToken(r *http.Request) string {
 	return parts[1]
 }
 
-// HasValidSession reports whether the request carries a valid session:
-// a CADDY_UI_TOKEN cookie or a valid Bearer (spec web-ui: "cookie or valid
-// Bearer").
-func HasValidSession(r *http.Request) bool {
-	if cookie, err := r.Cookie(sessionCookieName); err == nil && tokenMatches(cookie.Value) {
-		return true
+// credentialResult classifies the credentials presented by a request.
+type credentialResult int
+
+const (
+	credentialMissing credentialResult = iota
+	credentialValid
+	credentialInvalid
+	// credentialLimited: the client spent its failed-credential budget; the
+	// credential was not evaluated.
+	credentialLimited
+)
+
+// checkCredentials evaluates the session cookie (when allowCookie) and the
+// Bearer token under the per-client failed-credential budget shared by the
+// pages, the API and the login page: without it, a cookie or Bearer guess on
+// any route would bypass the POST /login limiter. A blocked client gets no
+// evaluation at all, so a correct guess cannot be told from a wrong one.
+func checkCredentials(r *http.Request, allowCookie bool) (credentialResult, time.Duration) {
+	var cookieValue string
+	if allowCookie {
+		if cookie, err := r.Cookie(sessionCookieName); err == nil {
+			cookieValue = cookie.Value
+		}
 	}
-	return tokenMatches(bearerToken(r))
+	bearer := bearerToken(r)
+	if cookieValue == "" && bearer == "" {
+		return credentialMissing, 0
+	}
+	if blocked, retry := ratelimit.CredentialBlocked(r); blocked {
+		return credentialLimited, retry
+	}
+	if (cookieValue != "" && validSession(cookieValue, time.Now())) || tokenMatches(bearer) {
+		return credentialValid, 0
+	}
+	ratelimit.CredentialFailed(r)
+	return credentialInvalid, 0
 }
 
-// SetSessionCookie sets the session cookie with HttpOnly; Secure;
-// SameSite=Strict; Path=/ and Max-Age 12h (decision D3: loopback is a
-// secure context, which is why Secure works over plain HTTP; SC-1).
-func SetSessionCookie(w http.ResponseWriter, token string) {
+// HasValidSession reports whether the request carries a valid session:
+// a CADDY_UI_TOKEN cookie or a valid Bearer (spec web-ui: "cookie or valid
+// Bearer"). A client over its failed-credential budget has no session.
+func HasValidSession(r *http.Request) bool {
+	result, _ := checkCredentials(r, true)
+	return result == credentialValid
+}
+
+// SetSessionCookie sets the session cookie (a NewSessionValue) with
+// HttpOnly; Secure; SameSite=Strict; Path=/ and Max-Age 12h (decision D3:
+// loopback is a secure context, which is why Secure works over plain HTTP;
+// SC-1).
+func SetSessionCookie(w http.ResponseWriter, value string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
-		Value:    token,
+		Value:    value,
 		Path:     "/",
 		HttpOnly: true,
 		Secure:   true,
@@ -80,16 +170,23 @@ func SetSessionCookie(w http.ResponseWriter, token string) {
 }
 
 // Login validates the credential (constant-time comparison) and, if valid,
-// sets the session cookie. Returns true only if the session was established.
+// sets a signed session cookie. Returns true only if the session was
+// established.
 func Login(w http.ResponseWriter, provided string) bool {
 	if !tokenMatches(provided) {
 		return false
 	}
-	SetSessionCookie(w, tokenFromEnv())
+	value, err := NewSessionValue(time.Now())
+	if err != nil {
+		return false
+	}
+	SetSessionCookie(w, value)
 	return true
 }
 
-// Logout invalidates the client's session cookie (immediate expiration).
+// Logout deletes the client's session cookie (immediate expiration). The
+// design is stateless: a copied cookie stays valid until its 12h expiry or
+// until CADDY_UI_TOKEN is rotated.
 func Logout(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
@@ -106,13 +203,17 @@ func Logout(w http.ResponseWriter) {
 // Session protects the SSR pages: it accepts a valid session cookie or
 // Bearer; without a session it redirects to /login (302, spec web-ui)
 // instead of responding 401, because the expected client is a browser.
+// A client over its failed-credential budget receives 429.
 func Session(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !HasValidSession(r) {
+		switch result, retry := checkCredentials(r, true); result {
+		case credentialValid:
+			next.ServeHTTP(w, r)
+		case credentialLimited:
+			ratelimit.TooManyRequests(w, retry)
+		default:
 			http.Redirect(w, r, "/login", http.StatusFound)
-			return
 		}
-		next.ServeHTTP(w, r)
 	})
 }
 

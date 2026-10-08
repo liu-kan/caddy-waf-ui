@@ -45,6 +45,7 @@ docker-compose*.yml
 .idea/
 .vscode/
 .atl/
+.kilo/
 openspec/
 
 # Python tooling (build context size): venv, uv lockfile, pyproject (not needed for the Go build)

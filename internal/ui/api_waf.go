@@ -265,7 +265,7 @@ func historyWindow(ctx context.Context, source, site string, dur time.Duration) 
 	if rt == nil || !rt.Loki.Configured() {
 		return nil, errors.New("loki history is not configured")
 	}
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, lokiQueryTimeout)
 	defer cancel()
 	now := time.Now().UTC()
 	p, err := rt.Loki.Search(ctx, events.Query{From: now.Add(-dur), To: now, Site: site, Limit: events.AnalysisLimit}, "")
@@ -300,14 +300,7 @@ func HandleAPISetPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := service.ApplyPolicy(actor(r, req.Reason), r.PathValue("domain"), req.Policy); err != nil {
-		switch {
-		case errors.Is(err, service.ErrInvalidDomain):
-			http.Error(w, "Invalid domain", http.StatusBadRequest)
-		case errors.Is(err, service.ErrInvalidPolicy):
-			http.Error(w, err.Error(), http.StatusBadRequest)
-		default:
-			http.Error(w, "Error applying the configuration", http.StatusInternalServerError)
-		}
+		writeChangeError(w, err, "Error applying the configuration")
 		return
 	}
 	writeJSON(w, http.StatusOK, `{"status":"success"}`)

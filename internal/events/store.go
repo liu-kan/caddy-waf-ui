@@ -46,7 +46,24 @@ type Store struct {
 
 	// OnAdd runs for every new locally ingested event (metrics).
 	OnAdd func(*Event)
+
+	windowMu sync.Mutex
+	windows  map[string]cachedWindow
 }
+
+// cachedWindow is a recently computed analysis window.
+type cachedWindow struct {
+	at     time.Time
+	events []*Event
+}
+
+// windowCacheTTL is how long an analysis window is reused: the pages that
+// analyze 7-14 days ask for the same window on every render. It is a
+// variable so tests can expire it.
+var windowCacheTTL = 15 * time.Second
+
+// maxCachedWindows bounds the distinct windows kept (sites x ranges).
+const maxCachedWindows = 16
 
 // OpenStore loads the events of the retention window from dir. max bounds
 // the number of events kept in memory (oldest are dropped first; their
@@ -133,54 +150,126 @@ func (s *Store) load(now time.Time) error {
 // are written to events-<day>.jsonl; events imported from Loki to
 // imported-<day>.jsonl.
 func (s *Store) Append(e *Event, source string) (bool, error) {
-	s.mu.Lock()
-	if _, dup := s.index[e.Key()]; dup {
-		s.mu.Unlock()
-		return false, nil
+	added, err := s.AppendBatch([]*Event{e}, source)
+	if err != nil {
+		return false, err
 	}
-	if e.TS.Before(s.cutoff(time.Now().UTC())) {
-		s.mu.Unlock()
-		return false, nil
-	}
-	e.Source = source
+	return added[0], nil
+}
+
+// pendingRecord is an event of a batch waiting to be written.
+type pendingRecord struct {
+	index int
+	event *Event
+	line  []byte
+	file  string
+}
+
+// AppendBatch stores events in order like Append, writing each run of
+// events of the same day file with one open and one fsync instead of one
+// per event. It returns, for the leading events it processed, whether each
+// was newly stored (false: duplicate or outside the retention window). On an
+// error the events from len(added) on were not stored.
+func (s *Store) AppendBatch(list []*Event, source string) ([]bool, error) {
 	prefix := localPrefix
 	if source == SourceLoki {
 		prefix = importedPrefix
 	}
-	name := prefix + e.TS.UTC().Format("2006-01-02") + ".jsonl"
-	line, err := json.Marshal(e)
-	if err != nil {
-		s.mu.Unlock()
-		return false, err
+	s.mu.Lock()
+	cutoff := s.cutoff(time.Now().UTC())
+	added := make([]bool, 0, len(list))
+	var pending []pendingRecord
+	seen := map[string]bool{}
+	budget := s.diskBytes
+	var stop error
+	for i, e := range list {
+		key := e.Key()
+		if _, dup := s.index[key]; dup || seen[key] || e.TS.Before(cutoff) {
+			added = append(added, false)
+			continue
+		}
+		stored := *e
+		stored.Source = source
+		line, err := json.Marshal(&stored)
+		if err != nil {
+			stop = err
+			break
+		}
+		if s.MaxDiskBytes > 0 && budget+int64(len(line)+1) > s.MaxDiskBytes {
+			stop = ErrStorageFull
+			break
+		}
+		budget += int64(len(line) + 1)
+		seen[key] = true
+		e.Source = source
+		pending = append(pending, pendingRecord{index: i, event: e, line: line, file: prefix + e.TS.UTC().Format("2006-01-02") + ".jsonl"})
+		added = append(added, true)
 	}
-	if s.MaxDiskBytes > 0 && s.diskBytes+int64(len(line)+1) > s.MaxDiskBytes {
-		s.mu.Unlock()
-		return false, ErrStorageFull
+	var stored []*Event
+	for start := 0; start < len(pending); {
+		end := start + 1
+		for end < len(pending) && pending[end].file == pending[start].file {
+			end++
+		}
+		if err := s.writeRunLocked(pending[start:end]); err != nil {
+			added = added[:pending[start].index]
+			stop = err
+			break
+		}
+		for _, p := range pending[start:end] {
+			stored = append(stored, p.event)
+		}
+		start = end
 	}
-	path := filepath.Join(s.dir, name)
-	offset := int64(0)
-	var padding int64
-	offset, padding, err = prepareAppend(path)
-	if err != nil {
-		s.mu.Unlock()
-		return false, err
-	}
-	s.diskBytes += padding
-	if err := appendLine(path, e); err != nil {
-		s.mu.Unlock()
-		return false, err
-	}
-	s.byTx[e.Key()] = e
-	s.index[e.Key()] = recordRef{File: name, Offset: offset, Size: len(line), TS: e.TS}
-	s.diskBytes += int64(len(line) + 1)
-	s.insertLocked(e)
 	s.trimLocked()
 	s.mu.Unlock()
-	s.rollups.Add(e)
-	if source == SourceLocal && s.OnAdd != nil {
-		s.OnAdd(e)
+	for _, e := range stored {
+		s.rollups.Add(e)
+		if source == SourceLocal && s.OnAdd != nil {
+			s.OnAdd(e)
+		}
 	}
-	return true, nil
+	return added, stop
+}
+
+// writeRunLocked appends records of one day file with a single write and
+// fsync, then indexes them.
+func (s *Store) writeRunLocked(run []pendingRecord) error {
+	path := filepath.Join(s.dir, run[0].file)
+	offset, padding, err := prepareAppend(path)
+	if err != nil {
+		return err
+	}
+	s.diskBytes += padding
+	var buf []byte
+	for _, p := range run {
+		buf = append(buf, p.line...)
+		buf = append(buf, '\n')
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o640) //nolint:gosec // G304/G302: data-dir file named from the event date; shared UID/GID, no world access.
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(buf); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	for _, p := range run {
+		key := p.event.Key()
+		s.byTx[key] = p.event
+		s.index[key] = recordRef{File: p.file, Offset: offset, Size: len(p.line), TS: p.event.TS}
+		s.insertLocked(p.event)
+		offset += int64(len(p.line) + 1)
+	}
+	s.diskBytes += int64(len(buf))
+	return nil
 }
 
 // A torn final record must not absorb the next successfully written event.
@@ -216,26 +305,6 @@ func prepareAppend(path string) (int64, int64, error) {
 		return 0, 0, err
 	}
 	return n + 1, 1, f.Sync()
-}
-
-func appendLine(path string, e *Event) error {
-	line, err := json.Marshal(e)
-	if err != nil {
-		return err
-	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o640) //nolint:gosec // G304/G302: data-dir file named from the event date; shared UID/GID, no world access.
-	if err != nil {
-		return err
-	}
-	if _, err := f.Write(append(line, '\n')); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		return err
-	}
-	return f.Close()
 }
 
 // insertLocked keeps events ordered by time (imports may be older).
@@ -449,16 +518,38 @@ func (s *Store) Query(q Query) ([]*Event, int) {
 	return list, total
 }
 
-// Window bounds analysis memory independently from the durable index.
+// Window bounds analysis memory independently from the durable index. The
+// window bounds are rounded to the minute and a computed window is reused
+// for windowCacheTTL; callers own the returned slice but must treat the
+// events as read-only (they are shared between requests).
 func (s *Store) Window(q Query) []*Event {
 	q.Limit = AnalysisLimit
 	q.Offset = 0
+	q.From = q.From.Truncate(time.Minute)
+	q.To = q.To.Truncate(time.Minute)
+	key := fmt.Sprintf("%+v", q)
+	now := time.Now()
+	s.windowMu.Lock()
+	if w, ok := s.windows[key]; ok && now.Sub(w.at) < windowCacheTTL {
+		s.windowMu.Unlock()
+		return append([]*Event(nil), w.events...)
+	}
+	s.windowMu.Unlock()
+
 	out, _, err := s.QueryDisk(q)
 	if err != nil {
 		slog.Error("analysis window incomplete", "error", err)
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].TS.Before(out[j].TS) })
-	return out
+	if err == nil {
+		s.windowMu.Lock()
+		if s.windows == nil || len(s.windows) >= maxCachedWindows {
+			s.windows = map[string]cachedWindow{}
+		}
+		s.windows[key] = cachedWindow{at: now, events: out}
+		s.windowMu.Unlock()
+	}
+	return append([]*Event(nil), out...)
 }
 
 // Sites returns the distinct sites in memory.

@@ -21,7 +21,7 @@ Always prefer the narrowest combination. Disabling a rule globally removes that 
 | --- | --- |
 | Exclude by | Rule ID, or Rule Tag (e.g., `attack-xss`, `attack-sqli`). Tag exclusions apply to all rules bearing that tag. |
 | Parameter | Exact target variable name as shown in event details, including query keys, form keys, and nested JSON paths (e.g., `json.messages.0.content`). Accepts regular expressions enclosed in slashes, e.g., `/^json\.messages\.\d+\.content$/`. Restricts only request parameters; cannot exclude headers or cookies. |
-| Path | Must begin with `/`, matching decoded request URI paths without query strings. |
+| Path | Must begin with `/`, matching decoded request URI paths without query strings. Both the path as received and its normalized form (dot segments and backslashes resolved) must match, so `/api/upload/../admin` never inherits an exclusion of `/api/upload`. |
 | Path match | `Prefix` (matches paths starting with this prefix) or `Exact` (exact path match). |
 | Expires at | Optional UTC expiration timestamp. Evaluated per request by Coraza using `TIME_EPOCH`; expires automatically without requiring config reloads. Expired entries remain visible until deleted. |
 | Note | Operational description saved with the rule (up to 200 characters). |

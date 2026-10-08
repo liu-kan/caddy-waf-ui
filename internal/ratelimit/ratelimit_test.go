@@ -6,6 +6,7 @@ package ratelimit
 // Allow(key) are the same production path that runs under -race.
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -393,5 +394,88 @@ func TestAPIMiddleware(t *testing.T) {
 	middleware.ServeHTTP(rec, req)
 	if rec.Code != http.StatusTooManyRequests {
 		t.Errorf("API request after burst: expected 429, got %d", rec.Code)
+	}
+}
+
+// TestLimitersKeyByIPNotPort: every new TCP connection has a new source
+// port, so keying by the full RemoteAddr would give each connection a fresh
+// bucket. The login and API limiters must key by the client IP only.
+func TestLimitersKeyByIPNotPort(t *testing.T) {
+	ok := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	cases := []struct {
+		name    string
+		handler http.Handler
+		method  string
+		ip      string
+		burst   int
+	}{
+		{"login", Login(ok), http.MethodPost, "192.0.2.50", LoginPerClientBurst},
+		{"api", API(ok), http.MethodGet, "192.0.2.51", APIBurst},
+		{"api-ipv6", API(ok), http.MethodGet, "2001:db8::51", APIBurst},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for i := 0; i <= tc.burst; i++ {
+				req := httptest.NewRequest(tc.method, "/x", nil)
+				req.RemoteAddr = net.JoinHostPort(tc.ip, strconv.Itoa(40000+i))
+				rec := httptest.NewRecorder()
+				tc.handler.ServeHTTP(rec, req)
+				if i < tc.burst && rec.Code != http.StatusOK {
+					t.Fatalf("request %d inside the burst: expected 200, got %d", i+1, rec.Code)
+				}
+				if i == tc.burst && rec.Code != http.StatusTooManyRequests {
+					t.Fatalf("request %d from the same IP on a new port: expected 429, got %d", i+1, rec.Code)
+				}
+			}
+		})
+	}
+}
+
+// TestCredentialFailuresBlockOnlyAfterBudget: failed credentials are charged
+// per client IP; the check before evaluating a credential consumes nothing,
+// so a client with a valid session is never slowed down by its own requests.
+func TestCredentialFailuresBlockOnlyAfterBudget(t *testing.T) {
+	t0 := time.Unix(1_700_000_000, 0)
+	now := t0
+	c := newClient(LoginPerClientPerMinute, LoginPerClientBurst, func() time.Time { return now })
+
+	for i := 0; i < 100; i++ {
+		if blocked, _ := c.Blocked("192.0.2.60"); blocked {
+			t.Fatal("checking the budget must not consume it")
+		}
+	}
+	for i := 0; i < LoginPerClientBurst; i++ {
+		c.Allow("192.0.2.60")
+	}
+	blocked, retry := c.Blocked("192.0.2.60")
+	if !blocked || retry != 12*time.Second {
+		t.Fatalf("after %d failures: expected blocked with Retry-After 12s, got %v %v", LoginPerClientBurst, blocked, retry)
+	}
+	if blocked, _ := c.Blocked("192.0.2.61"); blocked {
+		t.Fatal("another client must keep its own budget")
+	}
+	now = t0.Add(12 * time.Second)
+	if blocked, _ := c.Blocked("192.0.2.60"); blocked {
+		t.Fatal("one refilled token must unblock the client")
+	}
+}
+
+// TestCredentialGuardHelpers: CredentialBlocked/CredentialFailed share one
+// per-IP budget, independent of the POST /login limiter.
+func TestCredentialGuardHelpers(t *testing.T) {
+	ResetCredentialFailures()
+	t.Cleanup(ResetCredentialFailures)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "192.0.2.70:1111"
+	for i := 0; i < LoginPerClientBurst; i++ {
+		if blocked, _ := CredentialBlocked(req); blocked {
+			t.Fatalf("failure %d: blocked too early", i+1)
+		}
+		other := req.Clone(req.Context())
+		other.RemoteAddr = "192.0.2.70:" + strconv.Itoa(2000+i)
+		CredentialFailed(other)
+	}
+	if blocked, retry := CredentialBlocked(req); !blocked || retry < time.Second {
+		t.Fatalf("expected the IP to be blocked after %d failures on different ports, got %v %v", LoginPerClientBurst, blocked, retry)
 	}
 }

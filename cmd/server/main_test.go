@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +16,7 @@ import (
 	"github.com/developmi/caddy-waf-ui/internal/ipgroups"
 	"github.com/developmi/caddy-waf-ui/internal/metrics"
 	"github.com/developmi/caddy-waf-ui/internal/service"
+	"github.com/developmi/caddy-waf-ui/internal/ui"
 )
 
 // TestNewServerBounds (SH-1): the newServer constructor must set the four
@@ -110,7 +114,11 @@ func TestBuildHandler(t *testing.T) {
 	}
 }
 
+// testToken satisfies config.ValidateSecrets.
+const testToken = "0123456789abcdef0123456789abcdef"
+
 func TestRun(t *testing.T) {
+	t.Setenv("CADDY_UI_TOKEN", testToken)
 	called := false
 	err := run(func(srv *http.Server) error {
 		called = true
@@ -130,7 +138,18 @@ func TestRun(t *testing.T) {
 	}
 }
 
+// TestWeakTokenPreventsStartup: the server refuses to start with the
+// placeholder token of .env.example instead of exposing a known credential.
+func TestWeakTokenPreventsStartup(t *testing.T) {
+	t.Setenv("CADDY_UI_TOKEN", "replace-with-openssl-rand-hex-32")
+	called := false
+	if err := run(func(*http.Server) error { called = true; return nil }); err == nil || called {
+		t.Fatal("the placeholder token must prevent the startup")
+	}
+}
+
 func TestInvalidPrivacySettingsPreventStartup(t *testing.T) {
+	t.Setenv("CADDY_UI_TOKEN", testToken)
 	t.Setenv("CADDY_UI_REDACTION_LOCAL", "typo")
 	called := false
 	if err := run(func(*http.Server) error { called = true; return nil }); err == nil || called {
@@ -186,6 +205,58 @@ func TestIPGroupGauges(t *testing.T) {
 	for _, want := range []string{`waf_ipgroup_prefixes{group="office"} 2`, `waf_ipgroup_error{group="office"} 0`, `waf_ipgroup_pending{group="office"} 0`} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("metrics miss %q:\n%s", want, out.String())
+		}
+	}
+}
+
+// TestLokiSyncIsIncremental: the periodic Loki import covers the last day
+// once, then only what arrived since the previous sync plus a short overlap
+// for late lines, instead of re-querying 24 hours every interval.
+func TestLokiSyncIsIncremental(t *testing.T) {
+	var mu sync.Mutex
+	var starts []time.Time
+	var ends []time.Time
+	loki := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start, _ := strconv.ParseInt(r.URL.Query().Get("start"), 10, 64)
+		end, _ := strconv.ParseInt(r.URL.Query().Get("end"), 10, 64)
+		mu.Lock()
+		starts = append(starts, time.Unix(0, start))
+		ends = append(ends, time.Unix(0, end))
+		mu.Unlock()
+		_, _ = w.Write([]byte(`{"status":"success","data":{"result":[]}}`))
+	}))
+	defer loki.Close()
+	store, err := events.OpenStore(filepath.Join(t.TempDir(), "events"), 48*time.Hour, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := &ui.Runtime{Store: store, Loki: &events.LokiClient{URL: loki.URL, Token: "t"}}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); syncLoki(ctx, rt, 20*time.Millisecond) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		mu.Lock()
+		n := len(starts)
+		mu.Unlock()
+		if n >= 3 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	mu.Lock()
+	defer mu.Unlock()
+	if len(starts) < 3 {
+		t.Fatalf("expected at least 3 syncs, got %d", len(starts))
+	}
+	if span := ends[0].Sub(starts[0]); span < 23*time.Hour {
+		t.Fatalf("the first sync must cover the last day, covered %v", span)
+	}
+	for i := 1; i < len(starts); i++ {
+		if span := ends[i].Sub(starts[i]); span > lokiSyncOverlap+time.Minute {
+			t.Fatalf("sync %d re-queried %v; expected about the overlap (%v)", i+1, span, lokiSyncOverlap)
 		}
 	}
 }

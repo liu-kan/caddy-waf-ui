@@ -21,15 +21,26 @@ func (s *Store) ExportRetained(cloud *Store, policy Redaction) error {
 	}
 	sort.Strings(sorted)
 	for _, name := range sorted {
+		var batch []*Event
 		if err := walkEventFile(filepath.Join(s.dir, name), func(e *Event, offset int64, _ int) error {
 			ref, ok := s.index[e.Key()]
 			if !ok || ref.File != name || ref.Offset != offset || e.Source == SourceLoki {
 				return nil
 			}
-			_, err := cloud.Append(policy.Apply(e), SourceLocal)
+			batch = append(batch, policy.Apply(e))
+			if len(batch) < maxBatch {
+				return nil
+			}
+			_, err := cloud.AppendBatch(batch, SourceLocal)
+			batch = batch[:0]
 			return err
 		}); err != nil {
 			return err
+		}
+		if len(batch) > 0 {
+			if _, err := cloud.AppendBatch(batch, SourceLocal); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

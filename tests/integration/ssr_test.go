@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/developmi/caddy-waf-ui/internal/auth"
 	"github.com/developmi/caddy-waf-ui/internal/ui"
@@ -49,9 +50,13 @@ func setupSSR(t *testing.T, admin *adminStub) http.Handler {
 	return mux
 }
 
-// sessionCookie returns a valid cookie like the one POST /login sets.
+// sessionCookie returns a valid signed cookie like the one POST /login sets.
 func sessionCookie() *http.Cookie {
-	return &http.Cookie{Name: "CADDY_UI_TOKEN", Value: "super-secret-token", Path: "/"}
+	value, err := auth.NewSessionValue(time.Now())
+	if err != nil {
+		panic(err)
+	}
+	return &http.Cookie{Name: "CADDY_UI_TOKEN", Value: value, Path: "/"}
 }
 
 // formRequest builds a urlencoded POST with an optional cookie.
@@ -90,8 +95,8 @@ func TestSSRLoginSetsSessionCookie(t *testing.T) {
 		t.Errorf("expected a redirect to /, got %q", loc)
 	}
 	setCookie := rec.Header().Get("Set-Cookie")
-	if !strings.Contains(setCookie, "CADDY_UI_TOKEN=super-secret-token") {
-		t.Errorf("the cookie does not carry the token: %q", setCookie)
+	if !strings.Contains(setCookie, "CADDY_UI_TOKEN=v1.") || strings.Contains(setCookie, "super-secret-token") {
+		t.Errorf("the cookie must be a signed session, never the token: %q", setCookie)
 	}
 	for _, flag := range []string{"HttpOnly", "Secure", "SameSite=Strict"} {
 		if !strings.Contains(setCookie, flag) {
@@ -249,11 +254,8 @@ func TestSSRPRGModeChangeInvalidNoMutation(t *testing.T) {
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("expected 303 (PRG), got %d", rec.Code)
 	}
-	if q := url.QueryEscape("flash=error"); !strings.Contains(rec.Header().Get("Location"), q) {
-		loc := rec.Header().Get("Location")
-		if !strings.Contains(loc, "flash=error") {
-			t.Errorf("expected flash=error, got %q", loc)
-		}
+	if loc := rec.Header().Get("Location"); !strings.Contains(loc, "flash=invalid") {
+		t.Errorf("expected flash=invalid, got %q", loc)
 	}
 	if _, err := os.Stat(filepath.Join(os.Getenv("CADDY_UI_MANAGED_DIR"), "waf-example_com.conf")); !os.IsNotExist(err) {
 		t.Errorf("an invalid POST must not mutate state: the overlay must not exist")
@@ -487,7 +489,7 @@ func TestSSRPRGRollbackSuccess(t *testing.T) {
 }
 
 // TestSSRPRGRollbackInvalidNoMutation: an invalid snapshot returns 303
-// ?flash=error without mutating the overlay nor reloading Caddy (fail-fast).
+// ?flash=invalid without mutating the overlay nor reloading Caddy (fail-fast).
 func TestSSRPRGRollbackInvalidNoMutation(t *testing.T) {
 	admin := &adminStub{}
 	handler := setupSSR(t, admin)
@@ -509,8 +511,8 @@ func TestSSRPRGRollbackInvalidNoMutation(t *testing.T) {
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("expected 303 (PRG), got %d", rec.Code)
 	}
-	if !strings.Contains(rec.Header().Get("Location"), "flash=error") {
-		t.Errorf("expected flash=error, got %q", rec.Header().Get("Location"))
+	if !strings.Contains(rec.Header().Get("Location"), "flash=invalid") {
+		t.Errorf("expected flash=invalid, got %q", rec.Header().Get("Location"))
 	}
 
 	overlay, err := os.ReadFile(overlayPath)
@@ -527,7 +529,7 @@ func TestSSRPRGRollbackInvalidNoMutation(t *testing.T) {
 
 // TestSSRFormRollbackMissingDomainFlashError: a POST towards a domain
 // WITHOUT overlay or snapshots (domain not in the registry) responds 303
-// ?flash=error through the full stack (session + CSRF), without mutating
+// ?flash=invalid through the full stack (session + CSRF), without mutating
 // anything nor reloading Caddy (W2, error branch of the form with an absent
 // domain).
 func TestSSRFormRollbackMissingDomainFlashError(t *testing.T) {
@@ -546,8 +548,8 @@ func TestSSRFormRollbackMissingDomainFlashError(t *testing.T) {
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("expected 303 (PRG), got %d", rec.Code)
 	}
-	if !strings.Contains(rec.Header().Get("Location"), "flash=error") {
-		t.Errorf("a domain without snapshots must redirect with flash=error, got %q", rec.Header().Get("Location"))
+	if !strings.Contains(rec.Header().Get("Location"), "flash=invalid") {
+		t.Errorf("a domain without snapshots must redirect with flash=invalid, got %q", rec.Header().Get("Location"))
 	}
 	if _, err := os.Stat(filepath.Join(os.Getenv("CADDY_UI_MANAGED_DIR"), "waf-no_such_domain_com.conf")); !os.IsNotExist(err) {
 		t.Errorf("a failed rollback must not create overlays for the domain")

@@ -35,6 +35,17 @@ func draftPath(site string) string {
 	return filepath.Join(config.DataDir(), "drafts", domain.DomainSlug(site)+".json")
 }
 func checksum(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
+
+// Baseline identifies the stored configuration of a site (its overlays, the
+// Caddyfile, the custom rule files and the active IP group lists). A
+// read-modify-write reads it BEFORE reading the current lists and passes it
+// to ApplyIPRulesAt/ApplyExclusionsAt to detect concurrent changes.
+func Baseline(site string) (string, error) {
+	if err := ValidateDomain(site); err != nil {
+		return "", err
+	}
+	return baselineHash(site)
+}
 func baselineHash(site string) (string, error) {
 	h := sha256.New()
 	for _, path := range []string{files.WAFConfigPath(config.ManagedDir(), site), files.ExclusionsConfigPath(config.ManagedDir(), site), files.IPRulesConfigPath(config.ManagedDir(), site), config.CaddyfilePath(), config.BeforeFile(), config.AfterFile()} {
@@ -56,6 +67,9 @@ func baselineHash(site string) (string, error) {
 func saveDraft(site, kind string, o wafOverride) (Preview, error) {
 	changeMu.Lock()
 	defer changeMu.Unlock()
+	if err := checkSlugOwner(site); err != nil {
+		return Preview{}, err
+	}
 	base, err := baselineHash(site)
 	if err != nil {
 		return Preview{}, err
@@ -96,7 +110,7 @@ func CreatePolicyDraft(site string, p waf.Policy) (Preview, error) {
 	}
 	p = p.Normalize()
 	if err := p.Validate(); err != nil {
-		return Preview{}, err
+		return Preview{}, fmt.Errorf("%w: %v", ErrInvalidPolicy, err)
 	}
 	return saveDraft(site, "policy", wafOverride{policy: &p})
 }
@@ -105,7 +119,7 @@ func CreateExclusionsDraft(site string, list []waf.Exclusion) (Preview, error) {
 		return Preview{}, err
 	}
 	if err := waf.ValidateExclusions(list); err != nil {
-		return Preview{}, err
+		return Preview{}, fmt.Errorf("%w: %w", ErrInvalidInput, err)
 	}
 	return saveDraft(site, "exclusions", wafOverride{exclusions: &list})
 }

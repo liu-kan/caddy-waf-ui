@@ -63,9 +63,9 @@ func (h *eventHeap) Pop() any     { a := *h; x := a[len(a)-1]; *h = a[:len(a)-1]
 
 // QueryDisk scans retained files without materializing the entire history.
 // Only the requested page is retained; the durable index removes old duplicates.
+// The index is snapshotted under the read lock and the files are parsed
+// without it, so ingestion and pruning are never blocked by a long scan.
 func (s *Store) QueryDisk(q Query) ([]*Event, int, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	if q.Limit <= 0 {
 		q.Limit = 50
 	}
@@ -75,21 +75,29 @@ func (s *Store) QueryDisk(q Query) ([]*Event, int, error) {
 	if q.Limit+q.Offset > 20000 {
 		return nil, 0, fmt.Errorf("local pagination budget exceeded: narrow the time range")
 	}
-	keep := q.Limit + q.Offset
-	h := &eventHeap{}
-	heap.Init(h)
-	total := 0
-	names := map[string]bool{}
+	// refs holds, per file, the offsets of the canonical records in range.
+	refs := map[string]map[int64]struct{}{}
+	s.mu.RLock()
 	for _, ref := range s.index {
 		if (!q.From.IsZero() && ref.TS.Before(q.From)) || (!q.To.IsZero() && !ref.TS.Before(q.To)) {
 			continue
 		}
-		names[ref.File] = true
+		offsets := refs[ref.File]
+		if offsets == nil {
+			offsets = map[int64]struct{}{}
+			refs[ref.File] = offsets
+		}
+		offsets[ref.Offset] = struct{}{}
 	}
-	for name := range names {
+	s.mu.RUnlock()
+
+	keep := q.Limit + q.Offset
+	h := &eventHeap{}
+	heap.Init(h)
+	total := 0
+	for name, offsets := range refs {
 		err := walkEventFile(filepath.Join(s.dir, name), func(e *Event, offset int64, _ int) error {
-			ref, ok := s.index[e.Key()]
-			if !ok || ref.File != name || ref.Offset != offset || !q.Match(e) {
+			if _, ok := offsets[offset]; !ok || !q.Match(e) {
 				return nil
 			}
 			total++
@@ -99,6 +107,9 @@ func (s *Store) QueryDisk(q Query) ([]*Event, int, error) {
 			}
 			return nil
 		})
+		if errors.Is(err, os.ErrNotExist) {
+			continue // pruned after the snapshot: only expired events
+		}
 		if err != nil {
 			return nil, total, err
 		}

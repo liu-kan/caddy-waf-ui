@@ -11,6 +11,8 @@
 package config
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -97,9 +99,51 @@ func LogLevel() string {
 }
 
 // Token returns CADDY_UI_TOKEN (empty when unset: the session middleware
-// blocks all access without a valid token).
+// blocks all access without a valid token, and the server refuses to start,
+// see ValidateSecrets).
 func Token() string {
 	return os.Getenv("CADDY_UI_TOKEN")
+}
+
+// MinSecretLength is the minimum length of CADDY_UI_TOKEN and
+// CADDY_UI_METRICS_TOKEN: `openssl rand -hex 32` produces 64 characters.
+const MinSecretLength = 32
+
+// ValidateSecrets rejects an access token that is missing, shorter than
+// MinSecretLength, padded with whitespace or still the "replace-with..."
+// placeholder of .env.example. The metrics token, when set, follows the
+// same rules and must differ from the access token (Alloy holds it).
+func ValidateSecrets() error {
+	token := Token()
+	if token == "" {
+		return errors.New("CADDY_UI_TOKEN is not set: generate one with `openssl rand -hex 32`")
+	}
+	if err := validateSecret("CADDY_UI_TOKEN", token); err != nil {
+		return err
+	}
+	metrics := MetricsToken()
+	if metrics == "" {
+		return nil
+	}
+	if err := validateSecret("CADDY_UI_METRICS_TOKEN", metrics); err != nil {
+		return err
+	}
+	if metrics == token {
+		return errors.New("CADDY_UI_METRICS_TOKEN must differ from CADDY_UI_TOKEN")
+	}
+	return nil
+}
+
+func validateSecret(name, value string) error {
+	switch {
+	case strings.TrimSpace(value) != value:
+		return fmt.Errorf("%s has leading or trailing whitespace", name)
+	case strings.HasPrefix(strings.ToLower(value), "replace-with"):
+		return fmt.Errorf("%s is still the .env.example placeholder: generate one with `openssl rand -hex 32`", name)
+	case len(value) < MinSecretLength:
+		return fmt.Errorf("%s is too short (%d characters, minimum %d): generate one with `openssl rand -hex 32`", name, len(value), MinSecretLength)
+	}
+	return nil
 }
 
 // WAF baseline settings are operator-controlled, never HTTP payload fields.

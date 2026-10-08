@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/developmi/caddy-waf-ui/internal/config"
 	"github.com/developmi/caddy-waf-ui/internal/crs"
@@ -75,17 +76,23 @@ func eventStore() *events.Store {
 // and, when configured, the identity header of a trusted authenticating
 // proxy. The reason comes from the form or JSON payload.
 func actor(r *http.Request, reason string) service.Actor {
-	a := service.Actor{RemoteIP: clientIP(r), Reason: strings.TrimSpace(reason)}
+	a := service.Actor{RemoteIP: clientIP(r), Reason: truncateUTF8(strings.TrimSpace(reason), 500)}
 	if h := config.ActorHeader(); h != "" {
-		a.User = strings.TrimSpace(r.Header.Get(h))
-		if len(a.User) > 128 {
-			a.User = a.User[:128]
-		}
-	}
-	if len(a.Reason) > 500 {
-		a.Reason = a.Reason[:500]
+		a.User = truncateUTF8(strings.TrimSpace(r.Header.Get(h)), 128)
 	}
 	return a
+}
+
+// truncateUTF8 cuts s to at most max bytes without splitting a character.
+func truncateUTF8(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	cut := max
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }
 
 // Time ranges offered by the event and analysis pages.

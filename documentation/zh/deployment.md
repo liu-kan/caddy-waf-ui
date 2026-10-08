@@ -1,5 +1,7 @@
 # 接入现有部署
 
+已经按原生 Alloy 手册部署了 `/opt/librechat-a/observability` 的用户，请优先使用 [完整迁移手册](observability-migration.md)。它保留已有 `alloy.service` 与指标采集，逐项说明旧文件去留，并提供可合并的配套配置。
+
 把 caddy-waf-ui 作为边车并入已有的 caddy-with-auth 部署。原有的 Caddy 服务、镜像、证书卷（`/data`、`/config`）、DNS 凭据、caddy-security 认证、Cloudflare 可信代理和应用网络全部保留；不要再起第二个监听 80/443 的 Caddy。
 
 ## 改 Caddyfile：每个受管站点加两个 import

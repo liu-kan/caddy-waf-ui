@@ -1,0 +1,12 @@
+# Baseline before UI policy and CRS rules. UI can override the total limit.
+SecRequestBodyAccess On
+SecRequestBodyLimit 134217728
+SecRequestBodyNoFilesLimit 2097152
+SecRequestBodyInMemoryLimit 262144
+SecRequestBodyLimitAction Reject
+# A disk-backed mount avoids charging large upload spools to a small tmpfs.
+SecTmpDir /var/cache/coraza
+
+# Preserve reviewed runtime ctl exclusions below; never whitelist all /api/.
+# Temporary pipeline probe; remove after acceptance and reapply the mode.
+# SecRule REQUEST_URI "@streq /__waf_probe__" "id:1000001,phase:1,pass,log,auditlog,ctl:auditEngine=On,msg:'WAF_PIPELINE_PROBE',tag:'pipeline-test'"

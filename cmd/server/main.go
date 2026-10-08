@@ -71,6 +71,12 @@ func run(serve func(*http.Server) error) error {
 	// 1. Initialize the foundations: structured JSON logger to stdout (NIST AU-12)
 	logs.Setup()
 
+	// A missing, short or placeholder token would expose a guessable
+	// credential: refuse to start instead.
+	if err := config.ValidateSecrets(); err != nil {
+		return err
+	}
+
 	// Invalid privacy configuration is fatal rather than silently exporting more detail.
 	if _, err := events.ReadRedactionSettings(); err != nil {
 		return err
@@ -293,6 +299,15 @@ func maintain(ctx context.Context, stores ...*events.Store) {
 	}
 }
 
+// Loki sync windows: the first sync catches up on the last day; later syncs
+// read from the previous end minus lokiSyncOverlap, so lines that reach Loki
+// late are imported (the store drops duplicates). After a long outage the
+// catch-up is capped at lokiSyncMaxCatchUp.
+const (
+	lokiSyncOverlap    = 10 * time.Minute
+	lokiSyncMaxCatchUp = 7 * 24 * time.Hour
+)
+
 // syncLoki periodically imports events shipped by other nodes.
 func syncLoki(ctx context.Context, rt *ui.Runtime, interval time.Duration) {
 	ticker := time.NewTicker(interval)
@@ -300,6 +315,9 @@ func syncLoki(ctx context.Context, rt *ui.Runtime, interval time.Duration) {
 	last := time.Now().UTC().Add(-24 * time.Hour)
 	for {
 		end := time.Now().UTC().Add(-time.Minute)
+		if end.Sub(last) > lokiSyncMaxCatchUp {
+			last = end.Add(-lokiSyncMaxCatchUp)
+		}
 		qctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		res, err := events.Backfill(qctx, rt.Loki, rt.Store, last, end)
 		cancel()
@@ -309,7 +327,7 @@ func syncLoki(ctx context.Context, rt *ui.Runtime, interval time.Duration) {
 			if res.Imported > 0 {
 				slog.Info("Loki sync imported events", "imported", res.Imported)
 			}
-			last = end.Add(-24 * time.Hour) // overlap: late lines are deduplicated
+			last = end.Add(-lokiSyncOverlap)
 		}
 		select {
 		case <-ctx.Done():
@@ -357,7 +375,6 @@ func (s *siteResolver) resolve(host string) string {
 
 var gaugesOnce sync.Once
 
-// registerGauges exposes pipeline and policy state at scrape time.
 var ipGroupGauges sync.Once
 
 // registerIPGroupGauges exports the state of every IP group: list size,
@@ -397,6 +414,7 @@ func registerIPGroupGauges() {
 		sample(func(g ipgroups.Group) float64 { return flag(g.Pending != nil) }))
 }
 
+// registerGauges exposes pipeline and policy state at scrape time.
 func registerGauges(rt *ui.Runtime) {
 	gaugesOnce.Do(func() { registerGaugesOnce(rt) })
 }

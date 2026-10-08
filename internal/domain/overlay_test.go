@@ -121,3 +121,13 @@ func TestParseHeaderInvalidTimestamp(t *testing.T) {
 		t.Errorf("UpdatedRaw = %q; expected the raw value", info.UpdatedRaw)
 	}
 }
+
+func TestHeaderDomain(t *testing.T) {
+	content := []byte("# Caddy WAF UI managed - do not edit manually\n" + domain.Header("a-b.example.com", domain.ModeOn, time.Now()) + "\nSecRuleEngine On\n")
+	if got := domain.HeaderDomain(content); got != "a-b.example.com" {
+		t.Fatalf("expected a-b.example.com, got %q", got)
+	}
+	if got := domain.HeaderDomain([]byte("# no header\n")); got != "" {
+		t.Fatalf("expected no domain, got %q", got)
+	}
+}

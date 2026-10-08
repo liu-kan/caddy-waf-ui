@@ -1,6 +1,10 @@
 package auth
 
-import "net/http"
+import (
+	"net/http"
+
+	"github.com/developmi/caddy-waf-ui/internal/ratelimit"
+)
 
 // Middleware protects the routes by requiring a valid Bearer token.
 // It implements timing-attack protection per the security
@@ -10,8 +14,14 @@ import "net/http"
 func Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Missing, invalid or unconfigured token → 401 with no body (no
-		// information leakage)[cite: 1]. tokenMatches covers all three cases.
-		if !tokenMatches(bearerToken(r)) {
+		// information leakage)[cite: 1]. A client over its failed-credential
+		// budget gets 429 without its token being evaluated.
+		switch result, retry := checkCredentials(r, false); result {
+		case credentialValid:
+		case credentialLimited:
+			ratelimit.TooManyRequests(w, retry)
+			return
+		default:
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}

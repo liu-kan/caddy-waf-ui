@@ -1,12 +1,15 @@
 package ui
 
 import (
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
 
 	"github.com/developmi/caddy-waf-ui/internal/auth"
 	"github.com/developmi/caddy-waf-ui/internal/domain"
+	"github.com/developmi/caddy-waf-ui/internal/files"
 	"github.com/developmi/caddy-waf-ui/internal/service"
 	"github.com/developmi/caddy-waf-ui/internal/waf"
 )
@@ -24,6 +27,31 @@ func redirectAfterForm(w http.ResponseWriter, r *http.Request, flash string) {
 	}
 	q.Set("flash", flash)
 	http.Redirect(w, r, "/?"+q.Encode(), http.StatusSeeOther)
+}
+
+// flashKeyFor maps a failed form action to the flash key that tells the
+// user what happened and what to do next.
+func flashKeyFor(err error) string {
+	switch {
+	case errors.Is(err, service.ErrSlugConflict):
+		return "slug_conflict"
+	case errors.Is(err, service.ErrConflict):
+		return "conflict"
+	case errors.Is(err, service.ErrStaleDraft):
+		return "stale"
+	case errors.Is(err, service.ErrInvalidDomain), errors.Is(err, service.ErrInvalidMode),
+		errors.Is(err, service.ErrInvalidPolicy), errors.Is(err, service.ErrInvalidInput),
+		errors.Is(err, files.ErrInvalidBackup):
+		return "invalid"
+	}
+	return "error"
+}
+
+// formFailure logs a failed form action and redirects (PRG) with the flash
+// key of its cause.
+func formFailure(w http.ResponseWriter, r *http.Request, err error) {
+	slog.Warn("form action failed", "path", r.URL.Path, "error", err)
+	redirectAfterForm(w, r, flashKeyFor(err))
 }
 
 // HandleLogin processes POST /login (public route): it validates the token
@@ -56,7 +84,7 @@ func HandleFormSetMode(w http.ResponseWriter, r *http.Request) {
 	domainName := r.PathValue("domain")
 	mode := domain.WAFMode(r.FormValue("mode"))
 	if err := service.ApplyMode(actor(r, r.FormValue("reason")), domainName, mode); err != nil {
-		redirectAfterForm(w, r, "error")
+		formFailure(w, r, err)
 		return
 	}
 	redirectAfterForm(w, r, "success")
@@ -79,7 +107,7 @@ func HandleFormAddExclusion(w http.ResponseWriter, r *http.Request) {
 
 	current, err := readExclusions(domainName)
 	if err != nil {
-		redirectAfterForm(w, r, "error")
+		formFailure(w, r, err)
 		return
 	}
 	merged := append(current, exclusion)
@@ -95,7 +123,7 @@ func HandleFormAddExclusion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := service.ApplyExclusionsDraft(actor(r, form.Reason), domainName, merged, r.FormValue("draft_id")); err != nil {
-		redirectAfterForm(w, r, "error")
+		formFailure(w, r, err)
 		return
 	}
 	redirectAfterForm(w, r, "success")
@@ -103,15 +131,22 @@ func HandleFormAddExclusion(w http.ResponseWriter, r *http.Request) {
 
 // HandleFormAddIPRule processes POST /sites/{domain}/iprules: it adds the
 // entry to the DENY or ALLOW list of the current state and sends the complete
-// list to the shared chain (same merge reason as exclusions).
+// list to the shared chain (same merge reason as exclusions). The baseline is
+// read BEFORE the list, so a concurrent change is refused (ErrConflict)
+// instead of being overwritten.
 func HandleFormAddIPRule(w http.ResponseWriter, r *http.Request) {
 	domainName := r.PathValue("domain")
 	cidr := r.FormValue("cidr")
 	action := r.FormValue("action")
 
+	base, err := service.Baseline(domainName)
+	if err != nil {
+		formFailure(w, r, err)
+		return
+	}
 	current, err := readIPRules(domainName)
 	if err != nil {
-		redirectAfterForm(w, r, "error")
+		formFailure(w, r, err)
 		return
 	}
 	switch action {
@@ -120,12 +155,12 @@ func HandleFormAddIPRule(w http.ResponseWriter, r *http.Request) {
 	case "ALLOW":
 		current.Allowlist = append(current.Allowlist, cidr)
 	default:
-		redirectAfterForm(w, r, "error")
+		formFailure(w, r, fmt.Errorf("%w: unknown IP rule action %q", service.ErrInvalidInput, action))
 		return
 	}
 
-	if err := service.ApplyIPRules(actor(r, r.FormValue("reason")), domainName, current); err != nil {
-		redirectAfterForm(w, r, "error")
+	if err := service.ApplyIPRulesAt(actor(r, r.FormValue("reason")), domainName, current, base); err != nil {
+		formFailure(w, r, err)
 		return
 	}
 	redirectAfterForm(w, r, "success")
@@ -141,7 +176,7 @@ func HandleFormRollback(w http.ResponseWriter, r *http.Request) {
 	backupID := r.FormValue("snapId")
 
 	if err := service.ApplyRollback(actor(r, r.FormValue("reason")), domainName, backupID); err != nil {
-		redirectAfterForm(w, r, "error")
+		formFailure(w, r, err)
 		return
 	}
 	redirectAfterForm(w, r, "success")

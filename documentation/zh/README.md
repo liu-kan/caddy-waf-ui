@@ -10,6 +10,7 @@ UI 的页面地址都是 `/?tab=<页面>`。登录与 API 共用一个令牌（`
 
 - [快速开始](quick-start.md)：用仓库自带的 Compose 示例跑起来。
 - [接入现有部署](deployment.md)：把边车并入已有的 caddy-with-auth 部署。
+- [已部署 observability 的完整迁移手册](observability-migration.md)：适用于已有 LibreChat、Caddy/Coraza 和宿主机 Alloy/systemd 的部署，含配套 Compose、原生 Alloy、旧文件迁移、脱敏、验收与回滚。
 - [使用 coraza-ipset 镜像部署](ipset-image-deployment.md)：逐步部署或切换到带 IP 匹配插件的镜像（`liukan/caddy-with-auth:coraza-plugins-ipset`），配置国家白名单、验证与回退。
 - [配置参考](configuration.md)：全部环境变量、默认值和作用。
 - [后端镜像](backend-image.md)：对镜像的要求、哪些改动走挂载、需要固化进镜像时怎么做、CRS 版本与规则字典。

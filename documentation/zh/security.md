@@ -15,8 +15,10 @@ UI 的令牌等同于 WAF 管理员权限，Admin socket 等同于 Caddy 管理�
 ## 登录与会话
 
 - 用 `openssl rand -hex 32` 生成 `CADDY_UI_TOKEN`，放在 `.env`（0600，不入 Git）或密钥管理系统中。
-- 浏览器登录后得到会话 Cookie：`HttpOnly`、`Secure`、`SameSite=Strict`，有效期 12 小时。页面上的修改操作都带 CSRF 令牌。
-- 会话是无状态的。**Sign out** 只清除本机 Cookie，不能吊销已签发的会话；怀疑泄露时更换 `CADDY_UI_TOKEN` 并重建容器。
+- 浏览器登录后得到签名会话 Cookie（`v1.<签发时间>.<HMAC>`，不含令牌本身）：`HttpOnly`、`Secure`、`SameSite=Strict`，服务端在 12 小时后拒绝。页面上的修改操作都带 CSRF 令牌。
+- 会话是无状态的。**Sign out** 只清除本机 Cookie，被复制的 Cookie 在过期前仍有效；怀疑泄露时更换 `CADDY_UI_TOKEN` 并重建容器，所有会话立即失效。
+- 页面、API 和登录页上错误的会话 Cookie 或 Bearer 令牌按来源 IP 共用失败额度（每分钟 5 次），超出后在校验凭据之前直接返回 429。`POST /login` 另有按 IP 和全局的限流。
+- `CADDY_UI_TOKEN` 少于 32 个字符或仍为 `.env.example` 占位值时，服务拒绝启动。
 - `/api/*` 只接受 `Authorization: Bearer <CADDY_UI_TOKEN>`，不接受 Cookie。
 - 令牌比较使用常数时间比较。
 

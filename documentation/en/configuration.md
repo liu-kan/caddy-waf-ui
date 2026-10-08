@@ -8,7 +8,7 @@ All file system paths must be set by operators via environment variables; they a
 
 | Variable | Description | Default |
 | --- | --- | --- |
-| `CADDY_UI_TOKEN` | Secret token shared between browser authentication and API Bearer headers. Generate with `openssl rand -hex 32`. | None (Required in Compose) |
+| `CADDY_UI_TOKEN` | Secret token shared between browser authentication and API Bearer headers. Generate with `openssl rand -hex 32`. At least 32 characters; the server refuses to start with a shorter value or the `.env.example` placeholder. | None (required) |
 | `CADDY_UI_BIND` | Address and port for the UI HTTP server. | `0.0.0.0:8080` (Compose binds only to host `127.0.0.1:8080`) |
 | `CADDY_ADMIN_URL` | Caddy Admin API endpoint: `unix:///absolute/path` or `http(s)://host:port`. Credentials cannot be embedded in URLs. | Standalone: `http://caddy:2019`; Compose: `unix:///run/caddy-admin/admin.sock` |
 | `CADDY_UI_CADDYFILE` | Caddyfile path passed to `/load` (inside the UI container). | `/etc/caddy/Caddyfile` |
@@ -84,7 +84,7 @@ See [IP Groups](ip-groups.md) for detailed configuration and strategies.
 | `CADDY_UI_LOKI_SYNC_INTERVAL` | Interval for pulling events from other cluster nodes locally; `0` enables on-demand querying only. | `0` |
 | `CADDY_UI_GRAFANA_URL` | Grafana instance base URL used to render "Explore in Grafana" links on event details. | Empty |
 | `CADDY_UI_GRAFANA_LOKI_DATASOURCE` | UID of the Loki datasource used in Grafana Explore URLs. | `grafanacloud-logs` |
-| `CADDY_UI_METRICS_TOKEN` | Bearer token for accessing `/metrics`. When empty, `/metrics` returns HTTP 404. | Empty |
+| `CADDY_UI_METRICS_TOKEN` | Bearer token for accessing `/metrics`. When empty, `/metrics` returns HTTP 404. When set: at least 32 characters and different from `CADDY_UI_TOKEN`. | Empty |
 
 ## Compose-Only Variables
 

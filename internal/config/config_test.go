@@ -122,3 +122,39 @@ func TestArchiveRetentionAndCloudExport(t *testing.T) {
 		t.Fatalf("overrides: %d hours, export %v", config.AuditArchiveHours(), config.CloudExport())
 	}
 }
+
+// TestValidateSecrets: the access token is the only credential of the UI and
+// API, so a missing, short or copied placeholder token must stop the
+// startup. The optional metrics token follows the same rules when set and
+// must not reuse the admin token.
+func TestValidateSecrets(t *testing.T) {
+	strong := "0123456789abcdef0123456789abcdef"
+	other := "fedcba9876543210fedcba9876543210"
+	tests := []struct {
+		name, token, metrics string
+		ok                   bool
+	}{
+		{"strong token, metrics disabled", strong, "", true},
+		{"strong tokens", strong, other, true},
+		{"missing token", "", "", false},
+		{"short token", "super-secret-token", "", false},
+		{"placeholder token", "replace-with-openssl-rand-hex-32", "", false},
+		{"placeholder variant", "REPLACE-WITH-a-generated-token-0000000", "", false},
+		{"surrounding whitespace", " " + strong + " ", "", false},
+		{"short metrics token", strong, "metrics", false},
+		{"metrics token reuses the admin token", strong, strong, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("CADDY_UI_TOKEN", tt.token)
+			t.Setenv("CADDY_UI_METRICS_TOKEN", tt.metrics)
+			err := config.ValidateSecrets()
+			if tt.ok && err != nil {
+				t.Fatalf("expected a valid configuration, got %v", err)
+			}
+			if !tt.ok && err == nil {
+				t.Fatal("expected the configuration to be rejected")
+			}
+		})
+	}
+}

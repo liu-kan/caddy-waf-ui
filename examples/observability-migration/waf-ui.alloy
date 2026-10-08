@@ -1,0 +1,42 @@
+// APPEND once to the existing /etc/alloy/config.alloy after removing only
+// the retired raw-audit source/process chain. Preserve metrics and state.
+// This is a HOST path, not the container's /ui-data path.
+loki.source.file "librechat_waf_ui_events" {
+  targets = [{
+    __path__ = "/opt/librechat-a/observability/waf-ui/data/cloud/events/events-*.jsonl",
+    job      = "caddy-waf-ui",
+    kind     = "event",
+  }]
+  file_match { enabled = true }
+  // Read independently redacted queue records written before discovery.
+  tail_from_end = false
+  on_positions_file_error = "skip"
+  forward_to = [loki.process.librechat_waf_ui_events.receiver]
+}
+
+loki.process "librechat_waf_ui_events" {
+  stage.json {
+    expressions = {
+      ts = "ts", site = "site", action = "action", node = "node",
+      tx = "tx", ip = "ip", rule_ids_csv = "rule_ids_csv",
+      path = "path", rev = "rev",
+    }
+    drop_malformed = true
+  }
+  stage.timestamp {
+    source = "ts"
+    format = "RFC3339Nano"
+    action_on_failure = "skip"
+  }
+  stage.labels { values = {site = "", action = "", node = ""} }
+  stage.structured_metadata {
+    values = {tx = "", ip = "", rule_ids_csv = "", path = "", rev = ""}
+  }
+  stage.label_drop { values = ["filename"] }
+  forward_to = [loki.write.librechat_cloud.receiver]
+}
+
+// REUSE the existing loki.write "librechat_cloud" without adding a second
+// writer. It keeps GRAFANA_LOKI_URL, GRAFANA_LOKI_USERNAME and the protected
+// password_file /etc/alloy/secrets/librechat-loki-token from the old setup.
+// Only cloud/events is collected: never events/, imported files or raw audit.

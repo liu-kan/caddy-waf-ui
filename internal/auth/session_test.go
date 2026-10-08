@@ -35,8 +35,11 @@ func TestLoginSetsSessionCookieFlags(t *testing.T) {
 	}
 
 	c := cookieSesion(t, rec)
-	if c.Value != "super-secret-token" {
-		t.Errorf("the cookie must carry the token, got %q", c.Value)
+	if strings.Contains(c.Value, "super-secret-token") {
+		t.Errorf("the cookie must never carry the access token, got %q", c.Value)
+	}
+	if !validSession(c.Value, time.Now()) {
+		t.Errorf("the cookie must be a valid signed session, got %q", c.Value)
 	}
 	if !c.HttpOnly {
 		t.Error("the session cookie must be HttpOnly")
@@ -95,7 +98,11 @@ func TestSessionAcceptsValidCookie(t *testing.T) {
 	t.Setenv("CADDY_UI_TOKEN", "super-secret-token")
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "super-secret-token", HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode})
+	value, err := NewSessionValue(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: value, HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode})
 	rec := httptest.NewRecorder()
 	Session(okHandler).ServeHTTP(rec, req)
 
@@ -246,5 +253,44 @@ func TestCSRFValueRequiresToken(t *testing.T) {
 
 	if _, err := CSRFValue(); err == nil {
 		t.Error("with no token configured, CSRFValue must return an error")
+	}
+}
+
+// TestSignedSessionCookie: the session cookie is "v1.<issued>.<HMAC>": it
+// never exposes the access token, it expires server-side after 12h even if
+// the browser keeps it, it cannot be forged from the CSRF value, and rotating
+// the token invalidates every session.
+func TestSignedSessionCookie(t *testing.T) {
+	t.Setenv("CADDY_UI_TOKEN", "super-secret-token")
+	now := time.Now()
+	value, err := NewSessionValue(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(value, "super-secret-token") || !strings.HasPrefix(value, "v1.") {
+		t.Fatalf("unexpected session value %q", value)
+	}
+	if !validSession(value, now.Add(11*time.Hour)) {
+		t.Fatal("a session must be valid within 12h")
+	}
+	if validSession(value, now.Add(12*time.Hour+time.Second)) {
+		t.Fatal("a session must expire server-side after 12h")
+	}
+	if validSession(value, now.Add(-5*time.Minute)) {
+		t.Fatal("a session issued in the future must be rejected")
+	}
+	if validSession("super-secret-token", now) {
+		t.Fatal("the raw access token is no longer a session cookie")
+	}
+	csrf, _ := CSRFValue()
+	issued := strings.Split(value, ".")[1]
+	for _, forged := range []string{"v1." + issued + "." + csrf, "v2." + issued + "." + strings.Split(value, ".")[2], value + "0", "v1..", ""} {
+		if validSession(forged, now) {
+			t.Fatalf("forged session %q accepted", forged)
+		}
+	}
+	t.Setenv("CADDY_UI_TOKEN", "rotated-secret-token")
+	if validSession(value, now) {
+		t.Fatal("rotating the token must invalidate existing sessions")
 	}
 }

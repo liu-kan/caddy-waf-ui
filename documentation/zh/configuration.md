@@ -8,7 +8,7 @@ UI 只通过环境变量配置。Compose 部署时写在 `.env`（权限 0600，
 
 | 变量 | 说明 | 默认值 |
 | --- | --- | --- |
-| `CADDY_UI_TOKEN` | UI 登录和 API Bearer 共用的令牌。用 `openssl rand -hex 32` 生成 | 无（Compose 中必填） |
+| `CADDY_UI_TOKEN` | UI 登录和 API Bearer 共用的令牌。用 `openssl rand -hex 32` 生成；至少 32 个字符，过短或仍为 `.env.example` 占位值时拒绝启动 | 无（必填） |
 | `CADDY_UI_BIND` | UI 监听地址 | `0.0.0.0:8080`（Compose 只发布到宿主机 `127.0.0.1:8080`） |
 | `CADDY_ADMIN_URL` | Caddy Admin API：`unix:///绝对路径` 或 `http(s)://主机:端口`，不允许带凭据 | 单独运行 `http://caddy:2019`；Compose 中为 `unix:///run/caddy-admin/admin.sock` |
 | `CADDY_UI_CADDYFILE` | 发给 `/load` 的 Caddyfile（UI 容器内路径） | `/etc/caddy/Caddyfile` |
@@ -84,7 +84,7 @@ UI 只通过环境变量配置。Compose 部署时写在 `.env`（权限 0600，
 | `CADDY_UI_LOKI_SYNC_INTERVAL` | 定期把其他节点的事件导入本地；`0` 只按需查询 | `0` |
 | `CADDY_UI_GRAFANA_URL` | Grafana 实例地址，用于事件详情里的 Explore 链接 | 空 |
 | `CADDY_UI_GRAFANA_LOKI_DATASOURCE` | Explore 链接使用的 Loki 数据源 UID | `grafanacloud-logs` |
-| `CADDY_UI_METRICS_TOKEN` | `/metrics` 的 Bearer 令牌；为空时 `/metrics` 返回 404 | 空 |
+| `CADDY_UI_METRICS_TOKEN` | `/metrics` 的 Bearer 令牌；为空时 `/metrics` 返回 404。设置时至少 32 个字符，且不能与 `CADDY_UI_TOKEN` 相同 | 空 |
 
 ## 仅 Compose 使用的变量
 

@@ -64,32 +64,41 @@ type pageData struct {
 	wafData
 }
 
-// flashMessage translates the ?flash= key to a visible message (English UI
-// copy; the keys success/error/invalid_login/logged_out are machine keys).
+// flashMessages maps the ?flash= machine keys to their English UI copy.
+// Only these keys (and "backfill:<count>") are displayed: a crafted link can
+// never put its own text on the page.
+var flashMessages = map[string]string{
+	"success":       "Configuration updated successfully.",
+	"error":         "The configuration could not be applied. Check the service logs for details.",
+	"invalid":       "The change was rejected: check the submitted values. Nothing was modified.",
+	"stale":         "The reviewed preview is out of date. Preview the change again before applying it.",
+	"conflict":      "The configuration changed while you were editing it. Reload the page and try again.",
+	"slug_conflict": "Another managed domain already uses this domain's configuration files (dots and hyphens map to the same file name). Nothing was modified.",
+	"invalid_login": "Invalid access token.",
+	"logged_out":    "You have been signed out.",
+}
+
+// flashErrors are the keys rendered as an error toast.
+var flashErrors = map[string]bool{"error": true, "invalid": true, "stale": true, "conflict": true, "slug_conflict": true}
+
+// flashMessage translates the ?flash= key to a visible message; unknown
+// keys yield "" (nothing is displayed).
 func flashMessage(key string) string {
-	switch key {
-	case "success":
-		return "Configuration updated successfully."
-	case "error":
-		return "The configuration could not be applied. Check the service logs for details."
-	case "invalid_login":
-		return "Invalid access token."
-	case "logged_out":
-		return "You have been signed out."
-	default:
-		if n, ok := strings.CutPrefix(key, "backfill:"); ok {
-			return "Loki backfill finished: " + n + " event(s) imported."
-		}
-		return key
+	if msg, ok := flashMessages[key]; ok {
+		return msg
 	}
+	if n, ok := strings.CutPrefix(key, "backfill:"); ok && n != "" && strings.Trim(n, "0123456789") == "" {
+		return "Loki backfill finished: " + n + " event(s) imported."
+	}
+	return ""
 }
 
 // flashType maps the flash key to the visual type of the toast (fix J3-1):
-// error → red variant with role="alert" and aria-live="assertive"; the rest
+// errors → red variant with role="alert" and aria-live="assertive"; the rest
 // is presented as a green success/info with role="status" and
 // aria-live="polite".
 func flashType(key string) string {
-	if key == "error" {
+	if flashErrors[key] {
 		return "error"
 	}
 	return "success"
@@ -372,7 +381,9 @@ func HandleIndex(w http.ResponseWriter, r *http.Request) {
 	// clean redirect that carries the message in an ephemeral cookie; a
 	// refresh of the clean URL does not re-show the toast.
 	if key := r.URL.Query().Get("flash"); key != "" {
-		setFlashCookie(w, key)
+		if flashMessage(key) != "" {
+			setFlashCookie(w, key)
+		}
 		http.Redirect(w, r, cleanURL(r.URL.Query()), http.StatusFound)
 		return
 	}
@@ -397,7 +408,9 @@ func HandleLoginPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if key := r.URL.Query().Get("flash"); key != "" {
-		setFlashCookie(w, key)
+		if flashMessage(key) != "" {
+			setFlashCookie(w, key)
+		}
 		http.Redirect(w, r, "/login", http.StatusFound)
 		return
 	}

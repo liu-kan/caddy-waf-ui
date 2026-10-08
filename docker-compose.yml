@@ -151,7 +151,7 @@ services:
       CADDY_UI_LOKI_SELECTOR: ${CADDY_UI_LOKI_SELECTOR:-}
       CADDY_UI_LOKI_SYNC_INTERVAL: ${CADDY_UI_LOKI_SYNC_INTERVAL:-0s}
       CADDY_UI_GRAFANA_URL: ${CADDY_UI_GRAFANA_URL:-}
-      # 2026-10-07 03:20: Pass Grafana Loki data source UID to support custom source identifiers in Explore links.
+      # Grafana Loki data source UID used in Explore links.
       CADDY_UI_GRAFANA_LOKI_DATASOURCE: ${CADDY_UI_GRAFANA_LOKI_DATASOURCE:-grafanacloud-logs}
       CADDY_UI_PROBE_URLS: ${CADDY_UI_PROBE_URLS:-}
       CADDY_UI_IPGROUP_DIR: /ipgroups

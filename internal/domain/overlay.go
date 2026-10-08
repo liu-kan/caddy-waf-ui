@@ -87,3 +87,18 @@ func ParseHeader(line string) (OverlayHeader, error) {
 
 	return h, nil
 }
+
+// HeaderDomain returns the domain of the first header line of an overlay, or
+// "" when the content has no valid header.
+func HeaderDomain(content []byte) string {
+	for _, line := range strings.Split(string(content), "\n") {
+		if trimmed := strings.TrimSpace(line); strings.HasPrefix(trimmed, headerPrefix) {
+			h, err := ParseHeader(trimmed)
+			if err != nil {
+				return ""
+			}
+			return h.Domain
+		}
+	}
+	return ""
+}

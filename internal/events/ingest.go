@@ -213,9 +213,76 @@ func (in *Ingester) tailMatches(f *os.File) bool {
 	return bytes.Equal(readTail(f, in.state.Offset), in.state.Tail)
 }
 
+// maxBatch bounds the events normalized before they are written.
+const maxBatch = 512
+
+// batchItem is a normalized event and the data offset right after its record.
+type batchItem struct {
+	event *Event
+	end   int
+}
+
 // process ingests the complete records of data and returns the bytes
 // consumed. more reports that data is a bounded slice of a longer file.
+// Events are stored in batches (one fsync per day file); on a store error
+// the returned count ends right after the last stored record, so the
+// cursor never skips an unstored event.
 func (in *Ingester) process(data []byte, more bool) (int, error) {
+	chunk := in.ChunkSize
+	if chunk <= 0 {
+		chunk = defaultChunk
+	}
+	var batch []batchItem
+	committed := 0
+	flush := func(upTo int) error {
+		if len(batch) == 0 {
+			committed = upTo
+			return nil
+		}
+		list := make([]*Event, len(batch))
+		for i, item := range batch {
+			list[i] = item.event
+		}
+		n, err := in.store(list)
+		if err != nil {
+			if n > 0 {
+				committed = batch[n-1].end
+			}
+			batch = nil
+			return err
+		}
+		batch = batch[:0]
+		committed = upTo
+		return nil
+	}
+	consumed := in.scan(data, more, chunk, func(raw []byte, end int) error {
+		if e := in.normalize(raw); e != nil {
+			batch = append(batch, batchItem{event: e, end: end})
+			if len(batch) >= maxBatch {
+				return flush(end)
+			}
+		}
+		return nil
+	})
+	if consumed.err != nil {
+		return committed, consumed.err
+	}
+	if err := flush(consumed.n); err != nil {
+		return committed, err
+	}
+	return consumed.n, nil
+}
+
+// scanResult is the outcome of scan.
+type scanResult struct {
+	n   int
+	err error
+}
+
+// scan walks the complete records of data and calls visit with each record
+// and the offset right after it. It returns the bytes consumed (skipped
+// garbage included) or the first visit error.
+func (in *Ingester) scan(data []byte, more bool, chunk int64, visit func(raw []byte, end int) error) scanResult {
 	consumed := 0
 	for consumed < len(data) {
 		rest := data[consumed:]
@@ -233,9 +300,9 @@ func (in *Ingester) process(data []byte, more bool) (int, error) {
 			next := nextRecord(rest)
 			if next < 0 {
 				if !more {
-					return consumed, nil
+					return scanResult{n: consumed}
 				}
-				return consumed + len(rest), nil
+				return scanResult{n: consumed + len(rest)}
 			}
 			metrics.IngestErrors.Inc("parse")
 			consumed += next
@@ -250,27 +317,27 @@ func (in *Ingester) process(data []byte, more bool) (int, error) {
 				next := nextRecord(rest[1:])
 				if next < 0 {
 					if more {
-						return consumed + len(rest), nil
+						return scanResult{n: consumed + len(rest)}
 					}
-					return consumed, nil
+					return scanResult{n: consumed}
 				}
 				consumed += 1 + next
 				continue
 			}
-			if len(rest) >= defaultChunk && more {
+			if int64(len(rest)) >= chunk && more {
 				// A single record larger than the read window: skip it.
 				metrics.IngestErrors.Inc("parse")
-				return consumed + len(rest), nil
+				return scanResult{n: consumed + len(rest)}
 			}
-			return consumed, nil // incomplete record: wait for more data
+			return scanResult{n: consumed} // incomplete record: wait for more data
 		}
-		end := int(dec.InputOffset())
-		if err := in.ingest(raw); err != nil {
-			return consumed, err
+		end := consumed + int(dec.InputOffset())
+		if err := visit(raw, end); err != nil {
+			return scanResult{n: consumed, err: err}
 		}
-		consumed += end
+		consumed = end
 	}
-	return consumed, nil
+	return scanResult{n: consumed}
 }
 
 // nextRecord finds the next plausible record start after a parse error.
@@ -286,37 +353,54 @@ func nextRecord(b []byte) int {
 	return -1
 }
 
-func (in *Ingester) ingest(raw []byte) error {
+// normalize converts one audit record; records without rule matches, the
+// UI's own probes and unparseable records yield nil.
+func (in *Ingester) normalize(raw []byte) *Event {
 	e, err := in.Norm.Normalize(raw)
 	if err != nil {
-		if errors.Is(err, ErrProbeRecord) || errors.Is(err, ErrNoRuleMatch) {
-			return nil
+		if !errors.Is(err, ErrProbeRecord) && !errors.Is(err, ErrNoRuleMatch) {
+			metrics.IngestErrors.Inc("parse")
+			slog.Debug("skipping unparseable audit record", "error", err)
 		}
-		metrics.IngestErrors.Inc("parse")
-		slog.Debug("skipping unparseable audit record", "error", err)
 		return nil
 	}
-	added, err := in.Store.Append(e, SourceLocal)
-	if err != nil {
+	return e
+}
+
+// store persists a batch locally and in the export queue. It returns how
+// many leading events are durable in both.
+func (in *Ingester) store(list []*Event) (int, error) {
+	added, localErr := in.Store.AppendBatch(list, SourceLocal)
+	for i, ok := range added {
+		if ok {
+			in.status.Ingested++
+			in.status.LastEvent = list[i].TS
+		}
+	}
+	n := len(added)
+	if localErr != nil {
 		metrics.IngestErrors.Inc("store")
-		return fmt.Errorf("store event: %w", err)
+		localErr = fmt.Errorf("store event: %w", localErr)
 	}
-	if added {
-		in.status.Ingested++
-		in.status.LastEvent = e.TS
+	if in.CloudStore == nil || n == 0 {
+		return n, localErr
 	}
-	if in.CloudStore != nil {
-		// Export retries even when the local append already succeeded.
-		// Never recover detail from raw input that the retained event removed.
-		if !added {
+	// Export retries even when the local append already succeeded.
+	// Never recover detail from raw input that the retained event removed.
+	exports := make([]*Event, n)
+	for i := 0; i < n; i++ {
+		e := list[i]
+		if !added[i] {
 			if stored, ok := in.Store.GetFor(e.TxID, e.Node); ok {
 				e = stored
 			}
 		}
-		if _, err := in.CloudStore.Append(in.CloudRedaction.Apply(e), SourceLocal); err != nil {
-			metrics.IngestErrors.Inc("export")
-			return fmt.Errorf("export event: %w", err)
-		}
+		exports[i] = in.CloudRedaction.Apply(e)
 	}
-	return nil
+	exported, err := in.CloudStore.AppendBatch(exports, SourceLocal)
+	if err != nil {
+		metrics.IngestErrors.Inc("export")
+		return len(exported), errors.Join(localErr, fmt.Errorf("export event: %w", err))
+	}
+	return n, localErr
 }

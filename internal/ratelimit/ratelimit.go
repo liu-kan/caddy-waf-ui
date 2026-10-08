@@ -1,9 +1,10 @@
 // Package ratelimit implements the UI rate limiting with a zero-dep token
 // bucket (stdlib only, no golang.org/x/time/rate): single-process, no
-// sharding (D3). It covers RL-1 (login: per client + global ceiling) and
-// RL-2 (/api/* per RemoteAddr). The key is ALWAYS r.RemoteAddr verbatim:
-// X-Forwarded-For is not trusted (no-goal of the security-parity-mitigation
-// change).
+// sharding (D3). It covers RL-1 (login: per client + global ceiling), RL-2
+// (/api/* per client) and the failed-credential budget of the session and
+// Bearer checks. The key is ALWAYS the IP of r.RemoteAddr without the port
+// (every new connection has a new source port): X-Forwarded-For is not
+// trusted (no-goal of the security-parity-mitigation change).
 //
 // The design avoids goroutines and lifecycles: the prune of idle clients is
 // lazy and amortized inside Allow(), and the limiters are process globals
@@ -12,6 +13,7 @@ package ratelimit
 
 import (
 	"math"
+	"net"
 	"net/http"
 	"strconv"
 	"sync"
@@ -91,6 +93,16 @@ func (b *Bucket) Allow() (ok bool, retryAfter time.Duration) {
 // (perMinute is a per-minute rate) to avoid accumulating drift at exact
 // multiples (e.g. 12s → 1 token in a 5/min bucket).
 func (b *Bucket) allowAt(now time.Time) (ok bool, retryAfter time.Duration) {
+	b.refillAt(now)
+	if b.tokens >= 1 {
+		b.tokens--
+		return true, 0
+	}
+	return false, b.retryAfter()
+}
+
+// refillAt applies the continuous refill up to now.
+func (b *Bucket) refillAt(now time.Time) {
 	if elapsed := now.Sub(b.last); elapsed > 0 {
 		b.tokens += elapsed.Minutes() * b.perMinute
 		b.last = now
@@ -98,14 +110,23 @@ func (b *Bucket) allowAt(now time.Time) (ok bool, retryAfter time.Duration) {
 			b.tokens = b.capacity
 		}
 	}
+}
+
+// blockedAt reports, without consuming, whether no token is available at now.
+func (b *Bucket) blockedAt(now time.Time) (bool, time.Duration) {
+	b.refillAt(now)
 	if b.tokens >= 1 {
-		b.tokens--
-		return true, 0
+		return false, 0
 	}
+	return true, b.retryAfter()
+}
+
+// retryAfter returns the whole seconds until one token accumulates.
+func (b *Bucket) retryAfter() time.Duration {
 	if b.perMinute <= 0 {
 		// No refill (defensive: the call sites use constants > 0): a retry
 		// of one hour is the pragmatic cap to avoid returning infinity.
-		return false, time.Hour
+		return time.Hour
 	}
 	// Whole seconds until the missing token accumulates, with a minimum
 	// tolerance that neutralizes the floating-point rounding at exact edges
@@ -116,7 +137,7 @@ func (b *Bucket) allowAt(now time.Time) (ok bool, retryAfter time.Duration) {
 	if retry < 1 {
 		retry = 1
 	}
-	return false, time.Duration(retry) * time.Second
+	return time.Duration(retry) * time.Second
 }
 
 // clientEntry groups the bucket of a client with its last activity
@@ -182,13 +203,69 @@ func (c *ClientLimiter) Allow(key string) (ok bool, retryAfter time.Duration) {
 	return entry.bucket.Allow()
 }
 
+// Blocked reports whether the bucket of the key has no token left, without
+// consuming one. An unknown key has its full burst available.
+func (c *ClientLimiter) Blocked(key string) (bool, time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.clients[key]
+	if !ok {
+		return false, 0
+	}
+	entry.bucket.mu.Lock()
+	defer entry.bucket.mu.Unlock()
+	return entry.bucket.blockedAt(c.now())
+}
+
+// reset drops every client bucket.
+func (c *ClientLimiter) reset() {
+	c.mu.Lock()
+	c.clients = make(map[string]*clientEntry)
+	c.mu.Unlock()
+}
+
 // process-wide shared limiters (single-process, D3). The global login
 // ceiling is a single Bucket; the rest are per RemoteAddr.
 var (
 	loginClient = NewClient(LoginPerClientPerMinute, LoginPerClientBurst)
 	loginGlobal = NewBucket(LoginGlobalPerMinute, LoginGlobalBurst)
 	apiClient   = NewClient(APIPerMinute, APIBurst)
+	// credentialClient counts failed session cookies and Bearer tokens per
+	// client, with the per-client login budget. It has no global ceiling: a
+	// distributed attack must never lock valid sessions out.
+	credentialClient = NewClient(LoginPerClientPerMinute, LoginPerClientBurst)
 )
+
+// clientKey returns the IP of the request without the source port.
+func clientKey(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+// CredentialBlocked reports whether the client spent its failed-credential
+// budget. Callers check it BEFORE evaluating a presented credential, so a
+// blocked client learns nothing about its guesses; it consumes nothing.
+func CredentialBlocked(r *http.Request) (bool, time.Duration) {
+	return credentialClient.Blocked(clientKey(r))
+}
+
+// CredentialFailed charges one rejected session cookie or Bearer token to
+// the client.
+func CredentialFailed(r *http.Request) {
+	credentialClient.Allow(clientKey(r))
+}
+
+// ResetCredentialFailures clears the failed-credential budget of every
+// client (tests that share the process limiter).
+func ResetCredentialFailures() { credentialClient.reset() }
+
+// TooManyRequests writes the 429 response used by every limiter.
+func TooManyRequests(w http.ResponseWriter, retryAfter time.Duration) {
+	tooManyRequests(w, retryAfter)
+}
 
 // tooManyRequests responds 429 with Retry-After and a plain body, without
 // Set-Cookie: the short-circuit happens BEFORE auth/CSRF/RequestLogger, so a
@@ -208,7 +285,7 @@ func Login(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if ok, retryAfter := loginClient.Allow(r.RemoteAddr); !ok {
+		if ok, retryAfter := loginClient.Allow(clientKey(r)); !ok {
 			tooManyRequests(w, retryAfter)
 			return
 		}
@@ -220,12 +297,12 @@ func Login(next http.Handler) http.Handler {
 	})
 }
 
-// API limits /api/* per RemoteAddr (RL-2/D2). It is mounted OUTSIDE
+// API limits /api/* per client IP (RL-2/D2). It is mounted OUTSIDE
 // auth.Middleware (D4): token-less probes consume budget and the 429 cuts
 // before auth/CSRF/RequestLogger. It applies to all methods.
 func API(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if ok, retryAfter := apiClient.Allow(r.RemoteAddr); !ok {
+		if ok, retryAfter := apiClient.Allow(clientKey(r)); !ok {
 			tooManyRequests(w, retryAfter)
 			return
 		}

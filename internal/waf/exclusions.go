@@ -265,13 +265,19 @@ func (ex Exclusion) directive(id int) string {
 		default:
 			ctl = "ctl:ruleRemoveByTag=" + ex.Value
 		}
-		if !ex.Expires.IsZero() {
-			if ex.Path == "" {
-				return fmt.Sprintf(`SecRule TIME_EPOCH "@lt %d" "id:%d,phase:1,pass,t:none,nolog,%s"`, ex.Expires.Unix(), id, ctl)
-			}
-			return fmt.Sprintf("SecRule TIME_EPOCH \"@lt %d\" \"id:%d,phase:1,pass,t:none,nolog,chain\"\nSecRule REQUEST_FILENAME \"%s %s\" \"t:none,%s\"", ex.Expires.Unix(), id, op, ex.Path, ctl)
+		if ex.Path == "" {
+			return fmt.Sprintf(`SecRule TIME_EPOCH "@lt %d" "id:%d,phase:1,pass,t:none,nolog,%s"`, ex.Expires.Unix(), id, ctl)
 		}
-		return fmt.Sprintf(`SecRule REQUEST_FILENAME "%s %s" "id:%d,phase:1,pass,t:none,nolog,%s"`, op, ex.Path, id, ctl)
+		// REQUEST_FILENAME is the decoded but not normalized path. The
+		// exclusion applies only when the raw path AND its normalized form
+		// (dot segments, backslashes) are in scope, so a request such as
+		// /api/upload/../admin never inherits the exclusion of /api/upload,
+		// whatever normalization the backend applies.
+		normalized := fmt.Sprintf(`SecRule REQUEST_FILENAME "%s %s" "t:none,t:normalizePathWin,%s"`, op, ex.Path, ctl)
+		if !ex.Expires.IsZero() {
+			return fmt.Sprintf("SecRule TIME_EPOCH \"@lt %d\" \"id:%d,phase:1,pass,t:none,nolog,chain\"\nSecRule REQUEST_FILENAME \"%s %s\" \"t:none,chain\"\n%s", ex.Expires.Unix(), id, op, ex.Path, normalized)
+		}
+		return fmt.Sprintf("SecRule REQUEST_FILENAME \"%s %s\" \"id:%d,phase:1,pass,t:none,nolog,chain\"\n%s", op, ex.Path, id, normalized)
 	}
 	switch {
 	case ex.Type == ExcludeByID && ex.Param != "":

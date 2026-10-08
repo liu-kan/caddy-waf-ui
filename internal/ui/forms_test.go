@@ -2,6 +2,8 @@ package ui
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/developmi/caddy-waf-ui/internal/files"
 	"github.com/developmi/caddy-waf-ui/internal/service"
 	"github.com/developmi/caddy-waf-ui/internal/waf"
 )
@@ -208,7 +211,7 @@ func TestHandleFormSetModeSuccess(t *testing.T) {
 	}
 }
 
-// TestHandleFormSetModeInvalidModeFlashError: invalid mode → flash=error
+// TestHandleFormSetModeInvalidModeFlashError: invalid mode → flash=invalid
 // without mutating anything (the service validates before the backup).
 func TestHandleFormSetModeInvalidModeFlashError(t *testing.T) {
 	setupUIEnv(t)
@@ -219,8 +222,8 @@ func TestHandleFormSetModeInvalidModeFlashError(t *testing.T) {
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("expected 303, got %d", rec.Code)
 	}
-	if !strings.Contains(rec.Header().Get("Location"), "flash=error") {
-		t.Errorf("expected flash=error, got %q", rec.Header().Get("Location"))
+	if !strings.Contains(rec.Header().Get("Location"), "flash=invalid") {
+		t.Errorf("expected flash=invalid, got %q", rec.Header().Get("Location"))
 	}
 	if _, err := os.Stat(filepath.Join(os.Getenv("CADDY_UI_MANAGED_DIR"), "waf-example_com.conf")); !os.IsNotExist(err) {
 		t.Errorf("an invalid mode must not create the overlay")
@@ -288,8 +291,8 @@ func TestHandleFormAddIPRuleInvalidActionFlashError(t *testing.T) {
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("expected 303, got %d", rec.Code)
 	}
-	if !strings.Contains(rec.Header().Get("Location"), "flash=error") {
-		t.Errorf("an invalid action must redirect with flash=error, got %q", rec.Header().Get("Location"))
+	if !strings.Contains(rec.Header().Get("Location"), "flash=invalid") {
+		t.Errorf("an invalid action must redirect with flash=invalid, got %q", rec.Header().Get("Location"))
 	}
 }
 
@@ -382,8 +385,8 @@ func TestHandleFormRollbackInvalidSnapshotFlashError(t *testing.T) {
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("expected 303, got %d", rec.Code)
 	}
-	if !strings.Contains(rec.Header().Get("Location"), "flash=error") {
-		t.Errorf("an invalid snapshot must redirect with flash=error, got %q", rec.Header().Get("Location"))
+	if !strings.Contains(rec.Header().Get("Location"), "flash=invalid") {
+		t.Errorf("an invalid snapshot must redirect with flash=invalid, got %q", rec.Header().Get("Location"))
 	}
 	overlay, err := os.ReadFile(overlayPath)
 	if err != nil {
@@ -391,5 +394,57 @@ func TestHandleFormRollbackInvalidSnapshotFlashError(t *testing.T) {
 	}
 	if string(overlay) != "current state" {
 		t.Errorf("an invalid snapshot must not mutate the overlay: %q", overlay)
+	}
+}
+
+// TestFlashMessagesAreAllowListed: ?flash= only selects one of the UI's
+// messages; arbitrary text is never displayed (content spoofing through a
+// crafted link).
+func TestFlashMessagesAreAllowListed(t *testing.T) {
+	for _, key := range []string{"Your session expired: sign in at evil.example", "backfill:", "backfill:12 then visit evil.example", "<b>x</b>"} {
+		if got := flashMessage(key); got != "" {
+			t.Errorf("flash %q displayed %q", key, got)
+		}
+	}
+	for _, key := range []string{"success", "error", "invalid", "stale", "conflict", "slug_conflict", "invalid_login", "logged_out", "backfill:12"} {
+		if flashMessage(key) == "" {
+			t.Errorf("known flash %q has no message", key)
+		}
+	}
+	for key, want := range map[string]string{"error": "error", "invalid": "error", "stale": "error", "conflict": "error", "slug_conflict": "error", "success": "success"} {
+		if got := flashType(key); got != want {
+			t.Errorf("flashType(%q) = %q, want %q", key, got, want)
+		}
+	}
+	setupUIEnv(t)
+	rec := httptest.NewRecorder()
+	HandleIndex(rec, httptest.NewRequest(http.MethodGet, "/?tab=sites&flash=visit+evil.example", nil))
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == flashCookieName {
+			t.Fatal("an unknown flash key must not be carried to the next page")
+		}
+	}
+}
+
+// TestFormFailureKeys: a failed form explains what to do next instead of a
+// generic error.
+func TestFormFailureKeys(t *testing.T) {
+	cases := map[string]error{
+		"invalid":       service.ErrInvalidMode,
+		"stale":         service.ErrStaleDraft,
+		"conflict":      service.ErrConflict,
+		"slug_conflict": fmt.Errorf("wrapped: %w", service.ErrSlugConflict),
+		"error":         errors.New("caddy rejected the configuration"),
+	}
+	for want, err := range cases {
+		if got := flashKeyFor(err); got != want {
+			t.Errorf("flashKeyFor(%v) = %q, want %q", err, got, want)
+		}
+	}
+	if got := flashKeyFor(fmt.Errorf("x: %w", files.ErrInvalidBackup)); got != "invalid" {
+		t.Errorf("invalid snapshot: got %q", got)
+	}
+	if got := flashKeyFor(fmt.Errorf("%w: bad cidr", service.ErrInvalidInput)); got != "invalid" {
+		t.Errorf("invalid input: got %q", got)
 	}
 }

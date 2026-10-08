@@ -71,7 +71,16 @@ func RotateAudit(maxBytes int64) error {
 		if !state.HasWAF {
 			continue
 		}
-		if err := ApplyMode(Actor{User: "audit-maintenance", Reason: "reopen rotated audit log"}, site.Domain, state.Mode); err != nil {
+		// Republish the state stored under the change lock: a mode read here
+		// could be stale by the time the lock is free.
+		err = reapplySite(Actor{User: "audit-maintenance", Reason: "reopen rotated audit log"}, site.Domain, chainOpts{
+			failEvent:       "audit_reopen_failed",
+			reloadFailEvent: "audit_reopen_reload_failed",
+			successEvent:    "audit_reopened",
+			action:          "maintenance",
+			summary:         "republished to reopen the rotated audit log",
+		})
+		if err != nil {
 			return err
 		}
 	}

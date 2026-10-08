@@ -15,8 +15,10 @@ The UI token grants WAF administrator privileges; the Admin socket grants Caddy 
 ## Authentication & Sessions
 
 - Generate `CADDY_UI_TOKEN` using `openssl rand -hex 32`. Store it in `.env` (permissions `0600`, excluded from Git) or your secret manager.
-- Browser authentication issues session cookies marked `HttpOnly`, `Secure`, and `SameSite=Strict`, valid for 12 hours. All state-mutating UI operations require valid CSRF tokens.
-- Sessions are stateless. **Sign out** clears the local browser cookie but does not revoke previously signed tokens. If token leakage is suspected, rotate `CADDY_UI_TOKEN` and restart the container.
+- Browser authentication issues signed session cookies (`v1.<issued>.<HMAC>`, never the token itself) marked `HttpOnly`, `Secure`, and `SameSite=Strict`. The server rejects them after 12 hours. All state-mutating UI operations require valid CSRF tokens.
+- Sessions are stateless. **Sign out** clears the local browser cookie but does not revoke a copied cookie before its expiry. If leakage is suspected, rotate `CADDY_UI_TOKEN` and restart the container: every session ends.
+- Wrong session cookies and Bearer tokens on the pages, the API and the login page share a per-IP budget of 5 failures per minute; past it the client receives HTTP 429 before its credential is evaluated. `POST /login` keeps its own per-IP and global limits.
+- The server refuses to start when `CADDY_UI_TOKEN` is shorter than 32 characters or still the `.env.example` placeholder.
 - Endpoints under `/api/*` require `Authorization: Bearer <CADDY_UI_TOKEN>` and reject session cookies.
 - Token comparisons use constant-time operations (`subtle.ConstantTimeCompare`) to resist timing attacks.
 

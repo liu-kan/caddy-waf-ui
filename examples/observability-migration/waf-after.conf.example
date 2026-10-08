@@ -1,0 +1,7 @@
+# UI applies engine, response-body access and main audit settings LAST.
+SecAuditLogType Serial
+# All 5xx and all 4xx except 404; compatible with RE2.
+SecAuditLogRelevantStatus "^(5[0-9]{2}|4[1-9][0-9]|40[0-35-9])$"
+SecDebugLogLevel 1
+
+# Preserve reviewed configure-time target/removal exclusions below.

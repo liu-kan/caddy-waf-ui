@@ -51,7 +51,7 @@ func (s *Scanner) Scan() ([]*Site, error) {
 
 		site, err := parseSiteHeader(filepath.Join(s.managedDir, name), name)
 		if err != nil {
-			slog.Warn("overlay without a valid header, skipped", "archivo", name, "error", err)
+			slog.Warn("overlay without a valid header, skipped", "file", name, "error", err)
 			continue
 		}
 
@@ -105,14 +105,14 @@ func parseSiteHeader(path, name string) (*Site, error) {
 			site.Mode = info.Mode
 		default:
 			site.Degraded = true
-			slog.Warn("unknown mode in header, using DetectionOnly (degraded site)", "archivo", name, "mode", info.Mode)
+			slog.Warn("unknown mode in header, using DetectionOnly (degraded site)", "file", name, "mode", info.Mode)
 		}
 	}
 
 	if info.HasUpdated {
 		site.Updated = info.Updated
 	} else if info.UpdatedRaw != "" {
-		slog.Warn("invalid 'updated' timestamp in header", "archivo", name, "updated", info.UpdatedRaw)
+		slog.Warn("invalid 'updated' timestamp in header", "file", name, "updated", info.UpdatedRaw)
 	}
 
 	return site, nil

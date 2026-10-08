@@ -80,6 +80,7 @@ venv/
 .codegraph/
 .aider*
 .atl/
+.kilo/
 openspec/
 tools/bin/
 

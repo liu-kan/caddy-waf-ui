@@ -74,6 +74,27 @@ func clientIP(r *http.Request) string {
 	return host
 }
 
+// writeChangeError maps a failed configuration change to its HTTP status:
+// 400 for rejected input, 409 for conflicts (a concurrent change, a stale
+// reviewed draft or a domain whose file names belong to another domain) and
+// 500 with the fallback message otherwise.
+func writeChangeError(w http.ResponseWriter, err error, fallback string) {
+	switch {
+	case errors.Is(err, service.ErrInvalidDomain):
+		http.Error(w, "Invalid domain", http.StatusBadRequest)
+	case errors.Is(err, service.ErrInvalidMode):
+		http.Error(w, "Invalid WAF mode", http.StatusBadRequest)
+	case errors.Is(err, files.ErrInvalidBackup):
+		http.Error(w, "Invalid configuration snapshot", http.StatusBadRequest)
+	case errors.Is(err, service.ErrInvalidPolicy), errors.Is(err, service.ErrInvalidInput):
+		http.Error(w, err.Error(), http.StatusBadRequest)
+	case errors.Is(err, service.ErrSlugConflict), errors.Is(err, service.ErrConflict), errors.Is(err, service.ErrStaleDraft):
+		http.Error(w, err.Error(), http.StatusConflict)
+	default:
+		http.Error(w, fallback, http.StatusInternalServerError)
+	}
+}
+
 // writeJSON responds with a plain JSON confirmation (REST contract).
 func writeJSON(w http.ResponseWriter, status int, body string) {
 	w.Header().Set("Content-Type", "application/json")
@@ -94,15 +115,7 @@ func HandleSetMode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := service.ApplyMode(actor(r, reasonOf(r, req.Reason)), domainName, req.Mode); err != nil {
-		if errors.Is(err, service.ErrInvalidDomain) {
-			http.Error(w, "Invalid domain", http.StatusBadRequest)
-			return
-		}
-		if errors.Is(err, service.ErrInvalidMode) {
-			http.Error(w, "Invalid WAF mode", http.StatusBadRequest)
-			return
-		}
-		http.Error(w, "Error applying the configuration", http.StatusInternalServerError)
+		writeChangeError(w, err, "Error applying the configuration")
 		return
 	}
 
@@ -126,11 +139,7 @@ func HandleSetExclusions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := service.ApplyExclusions(actor(r, reasonOf(r, req.Reason)), domainName, req.Exclusions); err != nil {
-		if errors.Is(err, service.ErrInvalidDomain) {
-			http.Error(w, "Invalid domain", http.StatusBadRequest)
-			return
-		}
-		http.Error(w, "Error applying the configuration", http.StatusInternalServerError)
+		writeChangeError(w, err, "Error applying the configuration")
 		return
 	}
 
@@ -154,11 +163,7 @@ func HandleSetIPRules(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := service.ApplyIPRules(actor(r, reasonOf(r, "")), domainName, req); err != nil {
-		if errors.Is(err, service.ErrInvalidDomain) {
-			http.Error(w, "Invalid domain", http.StatusBadRequest)
-			return
-		}
-		http.Error(w, "Error applying the configuration", http.StatusInternalServerError)
+		writeChangeError(w, err, "Error applying the configuration")
 		return
 	}
 
@@ -192,15 +197,7 @@ func HandleRollback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := service.ApplyRollback(actor(r, reasonOf(r, req.Reason)), domainName, req.Backup); err != nil {
-		if errors.Is(err, service.ErrInvalidDomain) {
-			http.Error(w, "Invalid domain", http.StatusBadRequest)
-			return
-		}
-		if errors.Is(err, files.ErrInvalidBackup) {
-			http.Error(w, "Invalid configuration snapshot", http.StatusBadRequest)
-			return
-		}
-		http.Error(w, "Error restoring the configuration", http.StatusInternalServerError)
+		writeChangeError(w, err, "Error restoring the configuration")
 		return
 	}
 

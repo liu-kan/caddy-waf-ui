@@ -293,7 +293,7 @@ func TestExclusionPreviewApplyAndRemove(t *testing.T) {
 		t.Fatal("active exclusions must be described")
 	}
 	stale := formPost(t, mux, "/sites/example.com/exclusions/remove", url.Values{"index": {"0"}, "value": {"942100"}})
-	if !strings.Contains(stale.Header().Get("Location"), "flash=error") {
+	if !strings.Contains(stale.Header().Get("Location"), "flash=conflict") {
 		t.Fatal("a stale removal must not delete another exclusion")
 	}
 	ok := formPost(t, mux, "/sites/example.com/exclusions/remove", url.Values{"index": {"0"}, "value": {"930120"},

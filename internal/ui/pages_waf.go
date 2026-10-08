@@ -381,7 +381,7 @@ func windowFor(site string, d time.Duration) []*events.Event {
 	return store.Window(events.Query{From: time.Now().UTC().Add(-d), Site: site})
 }
 
-func buildEventsData(q url.Values, d *wafData) {
+func buildEventsData(ctx context.Context, q url.Values, d *wafData) {
 	key, dur := parseRange(q.Get("range"), "24h")
 	d.EventFilter = eventFilter{Site: q.Get("site"), Action: q.Get("action"), IP: q.Get("ip"), Rule: q.Get("rule"),
 		Path: q.Get("path"), Query: q.Get("q"), Range: key, Source: q.Get("source")}
@@ -404,9 +404,9 @@ func buildEventsData(q url.Values, d *wafData) {
 	var total int
 	if d.EventFilter.Source == "loki" {
 		rt := currentRuntime()
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		qctx, cancel := context.WithTimeout(ctx, lokiQueryTimeout)
 		defer cancel()
-		history, err := rt.Loki.Search(ctx, query, q.Get("cursor"))
+		history, err := rt.Loki.Search(qctx, query, q.Get("cursor"))
 		d.HistorySource = "Grafana Cloud Loki (viewed here)"
 		d.HistoryWarning = history.Warning
 		if err != nil {
@@ -469,7 +469,7 @@ func buildEventsData(q url.Values, d *wafData) {
 	}
 }
 
-func buildEventDetail(q url.Values, d *wafData) {
+func buildEventDetail(ctx context.Context, q url.Values, d *wafData) {
 	store := eventStore()
 	if store == nil {
 		return
@@ -478,11 +478,11 @@ func buildEventDetail(q url.Values, d *wafData) {
 	if !ok || q.Get("source") == "loki" {
 		rt := currentRuntime()
 		if rt.Loki.Configured() {
-			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			qctx, cancel := context.WithTimeout(ctx, lokiQueryTimeout)
 			defer cancel()
 			ts, _ := time.Parse(time.RFC3339Nano, q.Get("ts"))
 			var err error
-			e, err = rt.Loki.Find(ctx, q.Get("tx"), q.Get("node"), ts)
+			e, err = rt.Loki.Find(qctx, q.Get("tx"), q.Get("node"), ts)
 			if err != nil {
 				d.HistoryError = err.Error()
 				return
@@ -511,9 +511,9 @@ func buildEventDetail(q url.Values, d *wafData) {
 	d.LocalPossible = e.Node == "" || e.Node == config.NodeName()
 	if d.LocalPossible && q.Get("raw") == "1" {
 		// Read on demand only: matched values never enter the event files.
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		lctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
-		rec, err := events.FindLocalRecordWithPolicy(ctx, config.AuditLogPath(), e, localRedaction())
+		rec, err := events.FindLocalRecordWithPolicy(lctx, config.AuditLogPath(), e, localRedaction())
 		if err != nil {
 			d.LocalRecordError = err.Error()
 		} else {
@@ -523,9 +523,9 @@ func buildEventDetail(q url.Values, d *wafData) {
 	window := windowFor(e.Site, 14*24*time.Hour)
 	if e.Source == events.SourceLoki {
 		rt := currentRuntime()
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		qctx, cancel := context.WithTimeout(ctx, lokiQueryTimeout)
 		defer cancel()
-		h, err := rt.Loki.Search(ctx, events.Query{From: time.Now().Add(-14 * 24 * time.Hour), Site: e.Site, Limit: events.AnalysisLimit}, "")
+		h, err := rt.Loki.Search(qctx, events.Query{From: time.Now().Add(-14 * 24 * time.Hour), Site: e.Site, Limit: events.AnalysisLimit}, "")
 		if err == nil {
 			window = h.Events
 		} else {
@@ -589,7 +589,7 @@ func buildRulesData(q url.Values, d *wafData) {
 	d.RuleList = dict.Search(d.RuleQuery, kinds...)
 }
 
-func buildAnalysisData(q url.Values, site string, d *wafData) {
+func buildAnalysisData(ctx context.Context, q url.Values, site string, d *wafData) {
 	key, dur := parseRange(q.Get("range"), "7d")
 	d.RangeOptions = rangeOptions(key)
 	for _, r := range ranges {
@@ -600,9 +600,9 @@ func buildAnalysisData(q url.Values, site string, d *wafData) {
 	now := time.Now().UTC()
 	window := windowFor(site, dur)
 	if (q.Get("source") == "loki" || (q.Get("source") == "" && dur > 24*time.Hour)) && currentRuntime() != nil && currentRuntime().Loki.Configured() {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		qctx, cancel := context.WithTimeout(ctx, lokiQueryTimeout)
 		defer cancel()
-		h, err := currentRuntime().Loki.Search(ctx, events.Query{From: now.Add(-dur), To: now, Site: site, Limit: events.AnalysisLimit}, "")
+		h, err := currentRuntime().Loki.Search(qctx, events.Query{From: now.Add(-dur), To: now, Site: site, Limit: events.AnalysisLimit}, "")
 		if err != nil {
 			window = nil
 			d.HistoryError = err.Error()
@@ -738,18 +738,29 @@ func buildRecentEvents(d *wafData) {
 	d.EventRows = buildEventRows(list, dictionary())
 }
 
-// buildWAFData fills the tab-specific WAF models.
+// lokiQueryTimeout bounds one Loki query of a page.
+const lokiQueryTimeout = 15 * time.Second
+
+// pageLokiBudget bounds all the Loki queries of one page render together,
+// below the server WriteTimeout (30s) so the page is always delivered. It is
+// a variable so tests can shorten it.
+var pageLokiBudget = 20 * time.Second
+
+// buildWAFData fills the tab-specific WAF models. Remote queries follow the
+// request context (a disconnected client cancels them) within one budget.
 func buildWAFData(r *http.Request, tab string, data *pageData) {
 	q := r.URL.Query()
+	ctx, cancel := context.WithTimeout(r.Context(), pageLokiBudget)
+	defer cancel()
 	fillStatus(&data.wafData)
 	switch tab {
 	case "overview":
-		buildAnalysisData(url.Values{"range": {"24h"}}, "", &data.wafData)
+		buildAnalysisData(ctx, url.Values{"range": {"24h"}}, "", &data.wafData)
 		buildRecentEvents(&data.wafData)
 	case "events":
-		buildEventsData(q, &data.wafData)
+		buildEventsData(ctx, q, &data.wafData)
 	case "event":
-		buildEventDetail(q, &data.wafData)
+		buildEventDetail(ctx, q, &data.wafData)
 	case "rules":
 		buildRulesData(q, &data.wafData)
 	case "analysis":
@@ -757,7 +768,7 @@ func buildWAFData(r *http.Request, tab string, data *pageData) {
 		if data.CurrentSite != nil && q.Get("domain") != "" {
 			site = data.CurrentSite.Domain
 		}
-		buildAnalysisData(q, site, &data.wafData)
+		buildAnalysisData(ctx, q, site, &data.wafData)
 	case "policy":
 		buildPolicyData(data.CurrentSite, &data.wafData)
 		data.HistoryBackend = q.Get("source")
@@ -816,8 +827,7 @@ func HandleFormPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := service.ApplyPolicyDraft(actor(r, form.Reason), domainName, policy, r.FormValue("draft_id")); err != nil {
-		slog.Warn("policy change failed", "domain", domainName, "error", err)
-		redirectAfterForm(w, r, "error")
+		formFailure(w, r, err)
 		return
 	}
 	redirectAfterForm(w, r, "success")
@@ -866,9 +876,16 @@ func previewExclusions(w http.ResponseWriter, r *http.Request, domainName string
 // HandleFormRemoveExclusion removes one exclusion by its list index.
 func HandleFormRemoveExclusion(w http.ResponseWriter, r *http.Request) {
 	domainName := r.PathValue("domain")
+	// Baseline before the list: a concurrent change makes the apply fail
+	// with ErrConflict instead of dropping the other change.
+	base, err := service.Baseline(domainName)
+	if err != nil {
+		formFailure(w, r, err)
+		return
+	}
 	current, err := readExclusions(domainName)
 	if err != nil {
-		redirectAfterForm(w, r, "error")
+		formFailure(w, r, err)
 		return
 	}
 	idx := atoiDefault(r.FormValue("index"), -1)
@@ -876,12 +893,12 @@ func HandleFormRemoveExclusion(w http.ResponseWriter, r *http.Request) {
 	// may have changed since it was rendered.
 	if idx < 0 || idx >= len(current) || current[idx].Value != r.FormValue("value") ||
 		current[idx].Param != r.FormValue("param") || current[idx].Path != r.FormValue("path") {
-		redirectAfterForm(w, r, "error")
+		formFailure(w, r, fmt.Errorf("%w: exclusion %d is no longer the one displayed", service.ErrConflict, idx))
 		return
 	}
 	next := append(append([]waf.Exclusion{}, current[:idx]...), current[idx+1:]...)
-	if err := service.ApplyExclusions(actor(r, r.FormValue("reason")), domainName, next); err != nil {
-		redirectAfterForm(w, r, "error")
+	if err := service.ApplyExclusionsAt(actor(r, r.FormValue("reason")), domainName, next, base); err != nil {
+		formFailure(w, r, err)
 		return
 	}
 	redirectAfterForm(w, r, "success")
@@ -891,7 +908,7 @@ func HandleFormRemoveExclusion(w http.ResponseWriter, r *http.Request) {
 func HandleFormBackfill(w http.ResponseWriter, r *http.Request) {
 	rt := currentRuntime()
 	if rt == nil || rt.Store == nil || !rt.Loki.Configured() {
-		redirectAfterForm(w, r, "error")
+		formFailure(w, r, errors.New("loki backfill is not configured"))
 		return
 	}
 	_, dur := parseRange(r.FormValue("range"), "24h")
@@ -900,8 +917,7 @@ func HandleFormBackfill(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC()
 	res, err := events.Backfill(ctx, rt.Loki, rt.Store, now.Add(-dur), now)
 	if err != nil {
-		slog.Warn("Loki backfill failed", "error", err, "imported", res.Imported)
-		redirectAfterForm(w, r, "error")
+		formFailure(w, r, fmt.Errorf("loki backfill failed after %d imported event(s): %w", res.Imported, err))
 		return
 	}
 	slog.Info("Loki backfill finished", "fetched", res.Fetched, "imported", res.Imported, "queries", res.Queries)

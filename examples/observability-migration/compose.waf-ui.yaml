@@ -1,0 +1,63 @@
+# Merge LAST into the existing LibreChat Compose project; never run alone.
+# Paths resolve against /opt/librechat-a, the base Compose directory.
+# Preserve the existing Caddy image, certificates, environment and networks.
+x-waf-ui-runtime: &waf-ui-runtime
+  image: caddy-waf-ui:observability
+  build:
+    context: ${WAF_UI_SOURCE_DIR:-/opt/caddy-waf-ui}
+  user: "65532:65532"
+  read_only: true
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: [ALL]
+  env_file:
+    - ./observability/waf-ui/ui.env
+  volumes:
+    - ${WAF_UI_CADDYFILE_PATH:-./Caddyfile}:/etc/caddy/Caddyfile:ro
+    - ./observability/caddy:/etc/caddy/waf-custom:ro
+    - ./observability/waf-ui/managed:/ui-managed:rw
+    - ./observability/waf-ui/backups:/backups:rw
+    - ./observability/waf-ui/data:/ui-data:rw
+    - ./observability/waf-ui/admin:/run/caddy-admin:ro
+    - ./observability/waf-ui/ipgroups:/ipgroups:ro
+    - ./logs/caddy:/var/log/caddy:rw
+
+services:
+  caddy:
+    user: "65532:65532"
+    environment:
+      # Coraza's startup filesystem check also needs a writable temp path.
+      TMPDIR: /var/cache/coraza
+    volumes:
+      - ./observability/waf-ui/managed:/etc/caddy/ui-managed:ro
+      - ./observability/caddy:/etc/caddy/waf-custom:ro
+      - ./observability/waf-ui/admin:/run/caddy-admin:rw
+      - ./observability/waf-ui/tmp:/var/cache/coraza:rw
+    # Keep default for an existing implicit app network. Retain any additional
+    # explicit app networks in the merged configuration as well.
+    networks: [default, waf-probe]
+
+  waf-ui-config-init:
+    <<: *waf-ui-runtime
+    restart: "no"
+    command: ["./caddy-waf-ui", "init"]
+    healthcheck:
+      disable: true
+    network_mode: none
+
+  caddy-waf-ui:
+    <<: *waf-ui-runtime
+    restart: unless-stopped
+    command: ["./caddy-waf-ui"]
+    tmpfs: ["/tmp:size=16m,noexec,nosuid,nodev"]
+    mem_limit: 256m
+    cpus: 0.50
+    ports: ["127.0.0.1:18088:8080"]
+    networks: [waf-probe, waf-ui-egress]
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
+networks:
+  waf-probe:
+    internal: true
+  waf-ui-egress: {}

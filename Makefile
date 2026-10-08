@@ -11,6 +11,12 @@ UV := uv run
 # runs on the go.mod toolchain even when a newer Go is installed (Go fetches
 # it on first use, as in CI).
 GO_TOOLCHAIN := $(shell sed -n 's/^toolchain //p' go.mod)
+# vet, tests, govulncheck and build run on the Go release of the Dockerfile
+# builder (Dependabot bumps it), so CI tests and scans the toolchain that is
+# shipped. Override offline with `make test-race TEST_TOOLCHAIN=local`.
+GO_IMAGE_TOOLCHAIN := go$(shell sed -n 's/^FROM golang:\([0-9.]*\)-alpine.*/\1/p' Dockerfile)
+TEST_TOOLCHAIN ?= $(GO_IMAGE_TOOLCHAIN)
+GO := GOTOOLCHAIN=$(TEST_TOOLCHAIN) go
 
 .DEFAULT_GOAL := help
 
@@ -115,7 +121,7 @@ fmt-fix:                                 # Format all Go files in-place
 .PHONY: vet
 vet:                                     # Run go vet static analysis
 	@echo "==> Go vet"
-	@go vet ./...
+	@$(GO) vet ./...
 	@echo "✓ go vet passed."
 
 .PHONY: lint-go
@@ -164,26 +170,26 @@ lint: lint-go lint-yaml lint-actions lint-docker lint-security   # Run all linte
 .PHONY: test-unit
 test-unit:                               # Run unit tests (fast)
 	@echo "==> Tests (unit)"
-	@go test ./...
+	@$(GO) test ./...
 	@echo "✓ Unit tests passed."
 
 .PHONY: test-race
 test-race:                               # Run unit tests with the race detector
 	@echo "==> Tests (race)"
-	@go test -race ./...
+	@$(GO) test -race ./...
 	@echo "✓ Race tests passed."
 
 .PHONY: test-coverage
 test-coverage:                           # Run tests with race and statement coverage report
 	@echo "==> Tests (coverage)"
-	@go test -race -coverprofile=coverage.out ./...
-	@go tool cover -func=coverage.out
+	@$(GO) test -race -coverprofile=coverage.out ./...
+	@$(GO) tool cover -func=coverage.out
 	@echo "✓ Coverage report generated."
 
 .PHONY: test-integration
 test-integration:                        # Run integration tests with race detector
 	@echo "==> Tests (integration)"
-	@go test -race ./tests/integration/...
+	@$(GO) test -race ./tests/integration/...
 	@echo "✓ Integration tests passed."
 
 .PHONY: test-pkg
@@ -193,7 +199,7 @@ test-pkg:                                # Run tests for a specific package: mak
 		exit 1; \
 	fi
 	@echo "==> Tests (pkg: $(PKG))"
-	@go test -race -cover ./$(PKG)/...
+	@$(GO) test -race -cover ./$(PKG)/...
 	@echo "✓ Package tests passed."
 
 .PHONY: test
@@ -204,13 +210,13 @@ test: fmt vet lint test-race             # Run full test & quality suite (fmt, v
 .PHONY: vuln
 vuln:                                    # Check dependencies for known vulnerabilities
 	@echo "==> Vulnerabilities"
-	@$(TOOLS)/govulncheck ./...
+	@GOTOOLCHAIN=$(TEST_TOOLCHAIN) $(TOOLS)/govulncheck ./...
 	@echo "✓ Vulnerability scan passed."
 
 .PHONY: build
 build:                                   # Compile all packages
 	@echo "==> Build"
-	@go build ./...
+	@$(GO) build ./...
 	@echo "✓ Build passed."
 
 .PHONY: docker-build

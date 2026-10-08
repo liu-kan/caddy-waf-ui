@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/developmi/caddy-waf-ui/internal/auth"
 	"github.com/developmi/caddy-waf-ui/internal/domain"
 	"github.com/developmi/caddy-waf-ui/internal/logs"
 )
@@ -277,10 +279,11 @@ func TestOverviewScanFailureRendersEmptyState(t *testing.T) {
 	t.Setenv("CADDY_UI_BACKUP_DIR", t.TempDir())
 
 	for flash, want := range map[string]string{
-		"success":     "Configuration updated successfully.",
-		"error":       "The configuration could not be applied.",
-		"logged_out":  "You have been signed out.",
-		"unknown-key": "unknown-key", // flashMessage default: the key passes through as-is
+		"success":    "Configuration updated successfully.",
+		"error":      "The configuration could not be applied.",
+		"logged_out": "You have been signed out.",
+		"backfill:3": "Loki backfill finished: 3 event(s) imported.",
+		// Unknown keys are never displayed: see TestFlashMessagesAreAllowListed.
 	} {
 		// First GET with ?flash= (PRG): consumed with a clean redirect + cookie.
 		req := httptest.NewRequest(http.MethodGet, "/?flash="+flash, nil)
@@ -383,7 +386,11 @@ func TestHandleLoginPageWithoutSessionRendersForm(t *testing.T) {
 func TestHandleLoginPageWithSessionRedirects(t *testing.T) {
 	t.Setenv("CADDY_UI_TOKEN", "super-secret-token")
 	req := httptest.NewRequest(http.MethodGet, "/login", nil)
-	req.AddCookie(&http.Cookie{Name: "CADDY_UI_TOKEN", Value: "super-secret-token", Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode})
+	value, err := auth.NewSessionValue(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.AddCookie(&http.Cookie{Name: "CADDY_UI_TOKEN", Value: value, Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode})
 	rec := httptest.NewRecorder()
 	HandleLoginPage(rec, req)
 

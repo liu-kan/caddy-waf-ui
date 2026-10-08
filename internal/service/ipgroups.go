@@ -18,7 +18,6 @@ import (
 	"github.com/developmi/caddy-waf-ui/internal/files"
 	"github.com/developmi/caddy-waf-ui/internal/ipgroups"
 	"github.com/developmi/caddy-waf-ui/internal/journal"
-	"github.com/developmi/caddy-waf-ui/internal/waf"
 )
 
 // ErrIPGroupInUse rejects deleting a group that site policies use.
@@ -217,20 +216,15 @@ func ReapplyIPGroup(actor Actor, name string) error {
 	}
 	var errs []error
 	for _, site := range sites {
-		opts := chainOpts{
-			fileType:        files.FileTypeWAF,
-			confPath:        files.WAFConfigPath(config.ManagedDir(), site),
+		err := reapplySite(actor, site, chainOpts{
 			failEvent:       "ipgroup_publish_failed",
 			reloadFailEvent: "ipgroup_changed_but_reload_failed",
 			successEvent:    "ipgroup_published",
 			to:              name,
 			action:          "ipgroup",
 			summary:         summary,
-		}
-		opts.regenerate = func() (waf.Generated, error) {
-			return writeSiteWAF(site, wafOverride{})
-		}
-		if err := runChain(site, actor, opts); err != nil {
+		})
+		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", site, err))
 		}
 	}

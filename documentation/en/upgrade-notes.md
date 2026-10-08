@@ -66,3 +66,14 @@ Replace legacy `CADDY_UI_MATCHED_VALUES` with `CADDY_UI_REDACTION_LOCAL` and `CA
 ## IP Groups (2026-10-06)
 
 Compose adds a read-only volume mount: `${CADDY_UI_IPGROUP_PATH:-./ipgroups}:/ipgroups`. When integrating with an existing deployment, add this mount to the UI container or set `CADDY_UI_IPGROUP_DIR`. Generated IP group files are saved to `ipgroups/` inside the managed overlay volume, accessible to Caddy without additional mounts.
+
+## Security and Reliability Fixes (2026-10-07)
+
+Actions on upgrade:
+
+1. **Token strength**: the UI refuses to start unless `CADDY_UI_TOKEN` has at least 32 characters and is not the `.env.example` placeholder (`openssl rand -hex 32`). A set `CADDY_UI_METRICS_TOKEN` follows the same rules and must differ from `CADDY_UI_TOKEN`; update Alloy when you change it.
+2. **Sign in again**: session cookies are now signed and expire server-side after 12 hours; cookies issued by earlier versions are rejected once.
+3. **Exclusion paths**: path-scoped exclusions now also require the normalized path to be in scope. Existing overlays switch to the new rules on their next change; to apply them at once, save any change (for example the current mode) for each site with path-scoped exclusions.
+4. **Domain name collisions**: domains that differ only by `.` versus `-` (`a-b.example.com`, `a.b.example.com`) map to the same files. Changes to the second domain are refused (API 409); manage one of them outside the UI or rename it.
+
+Behavior changes without action: the change journal rotates at 8 MiB to `changes.jsonl.1` (Alloy keeps tailing `changes.jsonl`); audit rotations and IP group refreshes no longer create snapshots; analysis pages may lag new events by up to 15 seconds; the Makefile runs tests and `govulncheck` on the Dockerfile builder's Go (`TEST_TOOLCHAIN=local` offline).

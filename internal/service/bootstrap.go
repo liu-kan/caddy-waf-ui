@@ -32,6 +32,9 @@ func Initialize(sites []string) error {
 		return err
 	}
 	for _, site := range sites {
+		if err := checkSlugOwner(site); err != nil {
+			return err
+		}
 		exclusionsPath := files.ExclusionsConfigPath(config.ManagedDir(), site)
 		exclusions, err := waf.GenerateExclusions(&domain.Site{Domain: site}, nil)
 		if err != nil {

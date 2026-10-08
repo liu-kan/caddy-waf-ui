@@ -27,6 +27,15 @@ var ErrInvalidMode = errors.New("invalid WAF mode: only On, Off or DetectionOnly
 // ErrInvalidPolicy wraps policy validation failures (400 Bad Request).
 var ErrInvalidPolicy = errors.New("invalid WAF policy")
 
+// ErrInvalidInput wraps rejected exclusion and IP rule entries (400 Bad
+// Request); the wrapped message names the offending value.
+var ErrInvalidInput = errors.New("invalid input")
+
+// ErrConflict reports that the configuration changed between the read of a
+// read-modify-write and its apply (409 Conflict): the change is refused
+// instead of overwriting the other one.
+var ErrConflict = errors.New("the configuration changed since it was read; reload the page and try again")
+
 // A reload reads all overlays. Serialize complete write/reload/restore
 // transactions, including updates to different domains.
 var changeMu sync.Mutex
@@ -205,7 +214,15 @@ type chainOpts struct {
 	regenerate func() (waf.Generated, error)
 	// action and summary describe the change in the journal.
 	action, summary string
-	base            string
+	// base, when set, is the Baseline the change was prepared against; a
+	// different current baseline refuses the change with staleErr
+	// (ErrStaleDraft when nil).
+	base     string
+	staleErr error
+	// systemReapply marks a republish of the stored operator intent
+	// (audit rotation, IP group refresh): it takes no snapshot, so routine
+	// maintenance never evicts the operator's rollback history.
+	systemReapply bool
 }
 
 // diffIgnore hides lines that change on every generation.
@@ -221,12 +238,18 @@ func diffIgnore(line string) bool {
 func runChain(domainName string, actor Actor, opts chainOpts) error {
 	changeMu.Lock()
 	defer changeMu.Unlock()
+	if err := checkSlugOwner(domainName); err != nil {
+		return err
+	}
 	if opts.base != "" {
 		base, err := baselineHash(domainName)
 		if err != nil {
 			return err
 		}
 		if base != opts.base {
+			if opts.staleErr != nil {
+				return opts.staleErr
+			}
 			return ErrStaleDraft
 		}
 	}
@@ -254,9 +277,11 @@ func runChain(domainName string, actor Actor, opts chainOpts) error {
 		logs.LogAction(opts.failEvent, domainName, opts.from, opts.failTo, remoteIP, "read error: "+err.Error())
 		return fail(fmt.Errorf("error reading previous state: %w", err))
 	}
-	if err := files.Backup(domainName, opts.fileType); err != nil {
-		logs.LogAction(opts.failEvent, domainName, opts.from, opts.failTo, remoteIP, "backup error: "+err.Error())
-		return fail(fmt.Errorf("error creating backup: %w", err))
+	if !opts.systemReapply {
+		if err := files.Backup(domainName, opts.fileType); err != nil {
+			logs.LogAction(opts.failEvent, domainName, opts.from, opts.failTo, remoteIP, "backup error: "+err.Error())
+			return fail(fmt.Errorf("error creating backup: %w", err))
+		}
 	}
 
 	wafPath := files.WAFConfigPath(config.ManagedDir(), domainName)
@@ -369,6 +394,23 @@ func runChain(domainName string, actor Actor, opts chainOpts) error {
 	return nil
 }
 
+// reapplySite republishes the WAF overlay of a site from the state stored
+// when the change lock is held, without a snapshot. Maintenance that waited
+// for the lock therefore never reverts a change completed meanwhile.
+func reapplySite(actor Actor, site string, opts chainOpts) error {
+	if err := ValidateDomain(site); err != nil {
+		return err
+	}
+	opts.fileType = files.FileTypeWAF
+	opts.confPath = files.WAFConfigPath(config.ManagedDir(), site)
+	opts.systemReapply = true
+	opts.mutate = nil
+	opts.regenerate = func() (waf.Generated, error) {
+		return writeSiteWAF(site, wafOverride{})
+	}
+	return runChain(site, actor, opts)
+}
+
 // currentMode returns the stored mode for audit "from" fields.
 func currentMode(domainName string) string {
 	state, err := ReadSiteState(domainName)
@@ -465,11 +507,18 @@ func UpdateExclusions(domainName string, exclusions []waf.Exclusion, remoteIP st
 // ApplyExclusions replaces the canonical exclusion list of the domain and
 // recompiles it into the WAF overlay.
 func ApplyExclusions(actor Actor, domainName string, exclusions []waf.Exclusion) error {
+	return ApplyExclusionsAt(actor, domainName, exclusions, "")
+}
+
+// ApplyExclusionsAt is ApplyExclusions for a list derived from the state
+// read at base (see Baseline): it fails with ErrConflict when the site
+// changed since. An empty base applies unconditionally.
+func ApplyExclusionsAt(actor Actor, domainName string, exclusions []waf.Exclusion, base string) error {
 	if err := ValidateDomain(domainName); err != nil {
 		return err
 	}
 	if err := waf.ValidateExclusions(exclusions); err != nil {
-		return err
+		return fmt.Errorf("%w: %w", ErrInvalidInput, err)
 	}
 	site := &domain.Site{Domain: domainName}
 	opts := chainOpts{
@@ -481,6 +530,8 @@ func ApplyExclusions(actor Actor, domainName string, exclusions []waf.Exclusion)
 		to:              fmt.Sprintf("%d rules", len(exclusions)),
 		action:          "exclusions",
 		summary:         fmt.Sprintf("%d exclusion(s)", len(exclusions)),
+		base:            base,
+		staleErr:        ErrConflict,
 	}
 	opts.mutate = func() error {
 		snippet, err := waf.GenerateExclusions(site, exclusions)
@@ -508,11 +559,18 @@ func UpdateIPRules(domainName string, rules iprules.IPRules, remoteIP string) er
 // ApplyIPRules replaces the allow/deny lists of the domain. The IP entries
 // are validated and normalized BEFORE the backup.
 func ApplyIPRules(actor Actor, domainName string, rules iprules.IPRules) error {
+	return ApplyIPRulesAt(actor, domainName, rules, "")
+}
+
+// ApplyIPRulesAt is ApplyIPRules for lists derived from the state read at
+// base (see Baseline): it fails with ErrConflict when the site changed since.
+// An empty base applies unconditionally.
+func ApplyIPRulesAt(actor Actor, domainName string, rules iprules.IPRules, base string) error {
 	if err := ValidateDomain(domainName); err != nil {
 		return err
 	}
 	if err := iprules.ValidateIPRules(rules); err != nil {
-		return err
+		return fmt.Errorf("%w: %w", ErrInvalidInput, err)
 	}
 	site := &domain.Site{Domain: domainName}
 	summary := fmt.Sprintf("allow:%d deny:%d", len(rules.Allowlist), len(rules.Denylist))
@@ -525,6 +583,8 @@ func ApplyIPRules(actor Actor, domainName string, rules iprules.IPRules) error {
 		to:              summary,
 		action:          "iprules",
 		summary:         "IP rules " + summary,
+		base:            base,
+		staleErr:        ErrConflict,
 	}
 	opts.mutate = func() error {
 		snippet, err := iprules.GenerateSnippet(site, rules)
@@ -620,7 +680,7 @@ func PreviewExclusions(domainName string, exclusions []waf.Exclusion) (Preview, 
 		return Preview{}, err
 	}
 	if err := waf.ValidateExclusions(exclusions); err != nil {
-		return Preview{}, err
+		return Preview{}, fmt.Errorf("%w: %w", ErrInvalidInput, err)
 	}
 	return preview(domainName, wafOverride{exclusions: &exclusions})
 }

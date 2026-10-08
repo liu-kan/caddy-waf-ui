@@ -44,3 +44,58 @@ func TestAppendAndList(t *testing.T) {
 		t.Fatal("limit")
 	}
 }
+
+// TestJournalRotatesAndKeepsOnePreviousGeneration: maintenance and IP group
+// refreshes append entries continuously, so the journal is bounded: past
+// maxJournalBytes the file becomes changes.jsonl.1 (replacing the previous
+// generation) and the history reads both files.
+func TestJournalRotatesAndKeepsOnePreviousGeneration(t *testing.T) {
+	t.Setenv("CADDY_UI_DATA_DIR", t.TempDir())
+	prev := maxJournalBytes
+	maxJournalBytes = 2 << 10
+	t.Cleanup(func() { maxJournalBytes = prev })
+
+	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	const n = 200
+	for i := 0; i < n; i++ {
+		e := Entry{TS: base.Add(time.Duration(i) * time.Second), Site: "a.com", Action: "maintenance", Summary: strings.Repeat("s", 100), Result: ResultSuccess}
+		if err := Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var currentSize int64 // the last append may have rotated the file away
+	if current, err := os.Stat(Path()); err == nil {
+		currentSize = current.Size()
+	} else if !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	previous, err := os.Stat(Path() + ".1")
+	if err != nil {
+		t.Fatalf("the previous generation must exist: %v", err)
+	}
+	if currentSize > maxJournalBytes || previous.Size() > maxJournalBytes+512 {
+		t.Fatalf("journal files exceed the bound: %d and %d bytes", currentSize, previous.Size())
+	}
+	entries, err := List(Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) == 0 || len(entries) >= n {
+		t.Fatalf("expected a bounded history, got %d entries", len(entries))
+	}
+	if !entries[0].TS.Equal(base.Add((n - 1) * time.Second)) {
+		t.Fatalf("the newest entry must be kept, got %v", entries[0].TS)
+	}
+	if lines := strings.Count(readFile(t, Path()), "\n") + strings.Count(readFile(t, Path()+".1"), "\n"); lines != len(entries) {
+		t.Fatalf("history must include both generations: %d lines, %d entries", lines, len(entries))
+	}
+}
+
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	return string(b)
+}

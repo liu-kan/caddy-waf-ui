@@ -1,5 +1,7 @@
 # 使用 coraza-ipset 镜像部署
 
+已经运行 LibreChat 的 `observability` 和宿主机 Alloy/systemd、尚未接入 UI 的用户，先按 [完整迁移手册](observability-migration.md) 接入 UI，再使用本文切换镜像。
+
 `liukan/caddy-with-auth:coraza-plugins-ipset` 是带 [coraza-ipset 插件](backend-image.md#ip-匹配插件coraza-ipset) 的 caddy-with-auth 镜像。它与 `latest` 的唯一区别是 IP 名单的匹配方式：`@ipMatchFromFile` 改为二分查找，IP 群组规则的耗时不再随名单变大而增加。Caddyfile、overlay、UI 和全部规则都不用改。
 
 本文按顺序给出：确认镜像 → 全新部署或切换已有部署 → 配置国家白名单 → 验证 → 回退。命令都在 caddy-waf-ui 仓库根目录执行。

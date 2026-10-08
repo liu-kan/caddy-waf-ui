@@ -31,6 +31,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/) · Versioning: [Semantic
 * **Rollback**: WAF snapshots restore mode and policy and regenerate the overlay with the current exclusion list; exclusion snapshots roll back the list independently.
 * **Overview**: event counts and recent entries come from the stored WAF events instead of the raw-log tab, which previously left them empty.
 * **UI copy**: the IP Rules page describes the real behavior (connections are aborted; a non-empty allowlist closes every other address), and the Policy page states that bodies above the request body limit get HTTP 413 in On mode.
+* **Signed sessions**: the session cookie is `v1.<issued>.<HMAC>` instead of the access token itself and expires server-side after 12 hours; rotating `CADDY_UI_TOKEN` still ends every session. Existing browser sessions must sign in again.
+* **Startup secret check**: the server refuses to start when `CADDY_UI_TOKEN` is missing, shorter than 32 characters or still the `.env.example` placeholder; `CADDY_UI_METRICS_TOKEN`, when set, follows the same rules and must differ from it.
+* **Path-scoped exclusions**: a path-scoped exclusion applies only when both the request path and its normalized form (dot segments, backslashes) are in scope, so `/api/upload/../admin` never inherits the exclusion of `/api/upload`. Overlays pick up the new rules on their next change.
+* **Form and API errors**: failed forms name the cause (rejected input, stale preview, concurrent change, domain file-name conflict) instead of a generic error, and every failure is logged. The API answers 409 for conflicts and 400 for rejected entries.
+* **Maintenance republishes**: audit rotation and IP group refreshes republish the stored site state under the change lock without taking snapshots, and are journaled as `maintenance`/`ipgroup` actions.
+* **Analysis windows**: the 7/14-day windows of the Rules, Exclusions and Analysis pages are reused for 15 seconds instead of re-reading the retained files on every render.
+* **Toolchain**: `make vet`, the test targets, `make vuln` and `make build` run on the Go release of the Dockerfile builder, so CI tests and scans the shipped toolchain (`TEST_TOOLCHAIN=local` overrides it offline).
+* **Runtime image**: pins the OpenSSL libraries (`libcrypto3`, `libssl3`) instead of installing the `openssl` CLI.
 
 ### Fixed
 
@@ -42,12 +50,25 @@ Format: [Keep a Changelog](https://keepachangelog.com/) · Versioning: [Semantic
 * **Runtime log noise**: requests denied in phase 1 before the CRS initialization (IP group block and ban rules, the On-mode origin probe) start the CRS anomaly scores at 0, so CRS rule 980099 no longer logs three errors per request about unset scores.
 * **UI image build**: Alpine v3.23 replaced the pinned `tzdata=2026d-r0`; the Dockerfile now pins `2026e-r0`.
 * **Local lint with a newer Go**: `make lint-go` and the CI lint job run golangci-lint on the `go.mod` toolchain, so an installed Go newer than the one golangci-lint was built with no longer fails type-checking.
+* **Rate limiting per client**: the login and API limiters keyed clients by `ip:port`, so every new connection had a fresh budget; they now key by IP.
+* **Audit rotation race**: a rotation waiting for the change lock could republish a mode read before a concurrent change and silently revert it.
+* **Rollback history**: audit rotations and IP group refreshes no longer take WAF snapshots, which evicted operator snapshots after `CADDY_UI_BACKUP_KEEP` maintenance runs.
+* **Domain file-name collisions**: `a-b.example.com` and `a.b.example.com` share overlay and snapshot names; a change to the second is now refused instead of overwriting the first.
+* **Lost updates**: adding an IP rule or removing an exclusion while another change lands is refused as a conflict instead of overwriting it.
+* **Event page timeouts**: the Loki queries of a page share a 20-second budget below the server write timeout and stop when the browser disconnects.
+* **Event ingestion throughput**: events are written in batches with one fsync per day file instead of one per event (about 100 times faster on a burst); Loki imports and the export migration use the same path.
+* **Query locking**: event queries parse retained files without holding the store lock, so ingestion and pruning are not blocked during long scans.
+* **Change journal growth**: the journal rotates at 8 MiB to `changes.jsonl.1`, keeping one previous generation in the history.
+* **Loki sync**: periodic imports read from the previous sync minus a 10-minute overlap instead of re-querying 24 hours each time; the catch-up after an outage is capped at 7 days.
+* **Change reasons**: long reasons and proxy identities are truncated on character boundaries, so Chinese text no longer ends in a replacement character.
 
 ### Security
 
 * Standalone and Compose fallbacks are strict for both local and cloud events; `.env.example` recommends local standard and cloud strict. Invalid levels stop startup. `CADDY_UI_MATCHED_VALUES` is deprecated. Compose defaults to the `AHKZ` audit parts (no request headers); `ABHKZ` is a local diagnostic opt-in, and raw audit files never leave the host.
 * IP group downloads accept only HTTPS without embedded credentials, keep redirects on HTTPS and bound the download, decompressed and list sizes.
 * The UI mounts only the audit directory read-write for rotation, never the certificate-bearing `/data` volume. Alloy mounts neither the Docker nor the Admin socket.
+* Session cookies and Bearer tokens presented to the pages, the API or the login page share a per-IP failed-credential budget (5 per minute); a client over it receives 429 before its credential is evaluated. Previously only `POST /login` was limited.
+* `?flash=` only selects one of the UI's messages; arbitrary text from a crafted link is no longer displayed.
 
 ---
 

@@ -21,7 +21,7 @@
 | --- | --- |
 | Exclude by | 规则编号，或标签（如 `attack-xss`、`attack-sqli`），按标签时作用于带该标签的全部规则 |
 | Parameter | 事件中显示的 ARGS 名称，包括查询参数、表单字段和 JSON 字段（如 `json.messages.0.content`）；也可以写 `/正则/` 匹配一组名称，例如 `/^json\.messages\.\d+\.content$/`。只能排除参数，不能排除请求头和 Cookie |
-| Path | 以 `/` 开头，按解码后的路径匹配，不含查询串 |
+| Path | 以 `/` 开头，按解码后的路径匹配，不含查询串。原始路径和归一化后的路径（处理 `..`、`.`、反斜杠）都要匹配，`/api/upload/../admin` 不会继承 `/api/upload` 的排除 |
 | Path match | `Prefix`（默认，路径以此开头）或 `Exact`（完全相同） |
 | Expires at | 可选，UTC 时间。到期后由 Coraza 在每个请求中比对 `TIME_EPOCH` 自动失效，不需要定时重载；条目仍保留在列表中，需手动删除 |
 | Note | 随排除保存的说明，最多 200 字 |
